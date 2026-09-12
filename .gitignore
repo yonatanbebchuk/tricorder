@@ -1,0 +1,9 @@
+.venv/
+data/
+work/
+tools/
+*.blend1
+__pycache__/
+# OpenMVS writes a log next to wherever it is run
+*-[0-9A-F]*.log
+.DS_Store

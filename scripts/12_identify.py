@@ -72,7 +72,7 @@ def main() -> int:
         return np.asarray(cfw.rotation.matrix()), np.asarray(im.projection_center())
 
     votes: dict = {}                      # (ix, iy) -> {material: weight}
-    hits_obj: dict = {l: [] for l in OBJECTS}
+    hits_obj: dict = {l: {} for l in OBJECTS}   # label -> (ix, iy, iz) 5 cm voxel -> [weight, frames set]
     t0 = time.time()
     for k, im in enumerate(chosen):
         path = frames / im.name
@@ -128,8 +128,12 @@ def main() -> int:
                     key = (int(np.floor(x / a.cell)), int(np.floor(y / a.cell)))
                     votes.setdefault(key, {}).setdefault(mat, 0.0)
                     votes[key][mat] += score
-            else:
-                hits_obj[name].append(np.column_stack([Pm, np.full(len(Pm), score), np.full(len(Pm), k)]))
+            else:                                          # objects: vote into 5 cm voxels (raw points would not fit in memory)
+                vox = np.floor(Pm / 0.05).astype(np.int64)
+                for key in map(tuple, np.unique(vox, axis=0)):
+                    e = hits_obj[name].setdefault(key, [0.0, set()])
+                    e[0] += score
+                    e[1].add(k)
         if k % 10 == 0:
             print(f"  {k + 1}/{len(chosen)} frames, {time.time() - t0:.0f}s, {len(votes)} ground cells voted", flush=True)
 
@@ -161,22 +165,29 @@ def main() -> int:
     else:
         surfaces, raster, mats, ix0, iy0 = {}, None, [], 0, 0
 
-    # objects: cluster hit points per label
+    # objects: cluster occupied voxels per label (in plan), keep instances seen from at least two frames
     from sklearn.cluster import DBSCAN
     objects = []
-    for name, chunks in hits_obj.items():
-        if not chunks:
+    for name, vox in hits_obj.items():
+        if len(vox) < 20:
             continue
-        Pts = np.vstack(chunks)
-        lab = DBSCAN(eps=0.5, min_samples=25).fit(Pts[:, :2]).labels_
+        keys = np.array(list(vox.keys()), dtype=float) * 0.05 + 0.025
+        w = np.array([v[0] for v in vox.values()])
+        fr = [v[1] for v in vox.values()]
+        if len(keys) > 60000:                                 # a house is a lot of voxels; thin evenly
+            sel = np.linspace(0, len(keys) - 1, 60000).astype(int)
+            keys, w, fr = keys[sel], w[sel], [fr[i] for i in sel]
+        lab = DBSCAN(eps=0.35, min_samples=12).fit(keys[:, :2]).labels_
         for l in set(lab) - {-1}:
-            c = Pts[lab == l]
-            if len(set(c[:, 4].astype(int))) < 2:            # seen from at least two frames
+            idx = np.where(lab == l)[0]
+            c = keys[idx]
+            frames_seen = set().union(*[fr[i] for i in idx])
+            if len(frames_seen) < 2:
                 continue
-            objects.append({"label": name, "centroid": [round(float(v), 3) for v in c[:, :3].mean(axis=0)],
+            objects.append({"label": name, "centroid": [round(float(v), 3) for v in c.mean(axis=0)],
                             "bbox": [[round(float(v), 3) for v in c[:, :2].min(axis=0)], [round(float(v), 3) for v in c[:, :2].max(axis=0)]],
                             "z_range": [round(float(c[:, 2].min()), 2), round(float(c[:, 2].max()), 2)],
-                            "count": int(len(c)), "frames": int(len(set(c[:, 4].astype(int)))), "score": round(float(c[:, 3].mean()), 2)})
+                            "count": int(len(idx)), "frames": int(len(frames_seen)), "score": round(float(w[idx].mean()), 2)})
     objects.sort(key=lambda o: -o["count"])
     json.dump({"cell": a.cell, "labels": labels, "surfaces": surfaces, "objects": objects, "frames_used": len(chosen)},
               open(run / a.out, "w"), indent=1)

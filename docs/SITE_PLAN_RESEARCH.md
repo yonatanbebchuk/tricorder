@@ -201,6 +201,20 @@ the house windows and the garden gate ("door") all came back with confidences 0.
    `GRAVEL`, `AR-CONC`), stairs on `STAIRS` (treads, arrow, "UP n R @ 17 cm"), doors/gates on `DOORS`, windows on
    `WINDOWS`, trees on `PLANTING`; the PDF and the app draw the same, with a legend.
 
+## Result of the lift on the backyard (100 frames, every 6th, 4 minutes on the M4)
+
+Surfaces: lawn as one large zone in the middle, garden beds along both long fences, brick paving in front of the
+porch and in the far corner, the deck strip along the top fence; concrete and gravel patches where the path is.
+Elements, each placed in metres on the plan: the porch stairs (agreeing with the geometric detector to 0.3 m),
+two doors on the house wall, a door and two gates in the fences, five windows along the house, the fence runs,
+the trees. One label needs care: the detector calls the house a "shed", so "house" is now in the list. The sand pit
+was missed on the first pass because the detector returned the merged phrase "brick pavement sand" and the exact
+label match dropped it; the phrase is now mapped to its first concept. Frames every 4th instead of 6th cover the
+side passage, which the sparser subset skipped.
+
+Cost: Grounding DINO 2.5 s and SAM 1 s per frame, ray casting negligible; 150 frames in about 9 minutes. As a
+layout stage that is acceptable; it can also cache per-frame masks so a re-layout does not re-detect.
+
 ## Where the bay window went, and the fix
 
 The boundary comes from the ground footprint regularised with jogs under 1.2 m absorbed. The bay window's jog is

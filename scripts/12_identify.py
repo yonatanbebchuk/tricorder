@@ -27,7 +27,7 @@ import numpy as np  # noqa: E402
 
 SURFACES = {"brick pavement": "brick", "grass lawn": "grass", "sand": "sand", "garden bed": "garden", "gravel": "gravel",
             "concrete": "concrete", "wooden deck": "deck", "mulch": "garden", "soil": "garden"}
-OBJECTS = ["door", "gate", "window", "stairs", "shed", "tree", "wooden fence", "table", "chair", "grill", "pot"]
+OBJECTS = ["door", "gate", "window", "stairs", "house", "shed", "tree", "wooden fence", "table", "chair", "grill", "pot"]
 COLORS = {"brick": (178, 76, 60), "grass": (110, 160, 70), "sand": (222, 190, 120), "garden": (120, 85, 55), "gravel": (150, 150, 150),
           "concrete": (190, 190, 185), "deck": (160, 110, 70)}
 
@@ -89,7 +89,12 @@ def main() -> int:
                                                         target_sizes=[img.size[::-1]])[0]
         boxes = det["boxes"].cpu().numpy()
         scores = det["scores"].cpu().numpy()
-        names = [str(n) for n in det.get("text_labels", det.get("labels"))]
+        # the detector sometimes returns merged phrases ("brick pavement sand"): keep the first concept it contains
+        raw = [str(n) for n in det.get("text_labels", det.get("labels"))]
+        names = []
+        for n in raw:
+            hit = next((l for l in sorted(labels, key=len, reverse=True) if l in n), None)
+            names.append(hit or n)
         keep = [i for i, n in enumerate(names) if n in labels]
         if not keep:
             continue

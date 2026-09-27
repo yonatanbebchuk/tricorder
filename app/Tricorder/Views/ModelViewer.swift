@@ -30,6 +30,7 @@ enum SceneCache {
                 ambient.light?.type = .ambient
                 ambient.light?.intensity = 350
                 s.rootNode.addChildNode(ambient)
+                frameCamera(s)
                 return SceneBox(scene: s)
             }
         }
@@ -42,6 +43,42 @@ enum SceneCache {
         }
         return nil
     }
+}
+
+/// Photogrammetry meshes carry stray fragments far from the site; framing the whole bounding box makes the site tiny.
+/// This looks at the 5th–95th percentile of the vertices instead, from above and slightly in front.
+nonisolated private func frameCamera(_ scene: SCNScene) {
+    var xs: [Float] = [], ys: [Float] = [], zs: [Float] = []
+    scene.rootNode.enumerateHierarchy { node, _ in
+        guard let g = node.geometry, let src = g.sources(for: .vertex).first, src.bytesPerComponent == 4, src.componentsPerVector >= 3 else { return }
+        let m = node.simdWorldTransform
+        let n = src.vectorCount, step = max(1, n / 20_000)
+        src.data.withUnsafeBytes { buf in
+            guard let base = buf.baseAddress else { return }
+            for i in Swift.stride(from: 0, to: n, by: step) {
+                let p = base + i * src.dataStride + src.dataOffset
+                let v = m * SIMD4<Float>(p.load(as: Float.self), p.load(fromByteOffset: 4, as: Float.self), p.load(fromByteOffset: 8, as: Float.self), 1)
+                xs.append(v.x); ys.append(v.y); zs.append(v.z)
+            }
+        }
+    }
+    guard xs.count > 10 else { return }
+    func band(_ a: [Float]) -> (Float, Float) {
+        let s = a.sorted()
+        return (s[Int(Float(s.count - 1) * 0.05)], s[Int(Float(s.count - 1) * 0.95)])
+    }
+    let (x0, x1) = band(xs), (y0, y1) = band(ys), (z0, z1) = band(zs)
+    let center = SCNVector3((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2)
+    let extent = max(x1 - x0, z1 - z0, y1 - y0, 1)
+    let cam = SCNNode()
+    cam.name = "PreviewCamera"
+    cam.camera = SCNCamera()
+    cam.camera?.zNear = 0.05
+    cam.camera?.zFar = Double(extent) * 60
+    cam.camera?.fieldOfView = 50
+    cam.position = SCNVector3(center.x, center.y + CGFloat(extent) * 0.9, center.z + CGFloat(extent) * 1.15)
+    cam.look(at: center)
+    scene.rootNode.addChildNode(cam)
 }
 
 /// Orbitable 3D view of a USDZ preview (the decimated, textured mesh the pipeline exports).
@@ -106,7 +143,7 @@ struct SceneKitView: NSViewRepresentable {
     func updateNSView(_ v: SCNView, context: Context) {
         if v.scene !== scene {
             v.scene = scene
-            v.pointOfView = nil     // let SceneKit frame the model with its default camera
+            v.pointOfView = scene.rootNode.childNode(withName: "PreviewCamera", recursively: false)
         }
     }
 

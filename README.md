@@ -3,6 +3,15 @@
 Point an iPhone at a place, get back a metric, editable 3D scan of it and a dimensioned 2D site plan.
 All open source, runs on a Mac mini (Apple Silicon, 24 GB), no NVIDIA GPU needed.
 
+![Tricorder walking through an environment: home, the environment page, its 3D scan, a run, the recording, the asset history](docs/demo.gif)
+
+| | |
+|---|---|
+| ![Environment page: current assets, runs, recordings](docs/environment.png) | ![3D scan asset with the orbitable viewer and measurement prompts](docs/asset.png) |
+| *An environment: what it currently is, how it got there, what was sensed* | *A 3D-scan asset: SceneKit viewer, metrics, tape-measure prompts* |
+| ![A run: input → run → output, stage chips and live log](docs/run.png) | ![A recording: the video, its frames, the runs on it](docs/recording.png) |
+| *A run: what went in, what came out, the five stages and their logs* | *A recording: the raw footage, frame extraction, every run on it* |
+
 ```
  iPhone 17 Pro video
         │  01_extract_frames.py   ffmpeg/OpenCV, keeps the sharpest 2 fps

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(Workspace.self) private var ws
+    @State private var columns: NavigationSplitViewVisibility = .all
 
     var body: some View {
         @Bindable var ws = ws
@@ -9,7 +10,7 @@ struct ContentView: View {
             if ws.root == nil {
                 SetupView()
             } else {
-                NavigationSplitView {
+                NavigationSplitView(columnVisibility: $columns) {
                     SidebarView(selection: Binding(get: { ws.selection }, set: { s in if let s { ws.select(s) } else { ws.goHome() } }))
                         .navigationSplitViewColumnWidth(min: 250, ideal: 300, max: 440)
                 } detail: {

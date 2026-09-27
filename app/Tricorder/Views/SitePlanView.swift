@@ -10,13 +10,15 @@ struct SitePlanView: View {
     @State private var showContours = true
     @State private var showFootprint = false
     @State private var showMeasurements = true
+    @State private var showLinework = true
+    @State private var cleanDrawing = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             GeometryReader { geo in
                 let rect = fitRect(in: geo.size)
                 ZStack(alignment: .topLeading) {
-                    if let img = record.planImage {
+                    if let img = record.planImage, !cleanDrawing {
                         FileImage(url: img, maxPixel: 3000)
                             .frame(width: rect.width, height: rect.height)
                             .offset(x: rect.minX, y: rect.minY)
@@ -41,7 +43,7 @@ struct SitePlanView: View {
                                 if major { ctx.draw(Text(String(format: "%.0f", gy)).font(.system(size: 9)).foregroundStyle(.secondary), at: pt(x1, gy).applying(.init(translationX: 9, y: 0))) }
                             }
                         }
-                        if showContours {
+                        if showContours, !cleanDrawing {
                             for c in overlay.contours where c.points.count > 1 {
                                 var p = Path()
                                 p.move(to: pt(c.points[0][0], c.points[0][1]))
@@ -60,6 +62,16 @@ struct SitePlanView: View {
                                 for q in poly.dropFirst() { p.addLine(to: pt(q[0], q[1])) }
                                 p.closeSubpath()
                                 ctx.stroke(p, with: .color(Color(red: 0.16, green: 0.44, blue: 0.59)), style: StrokeStyle(lineWidth: 1, dash: [5, 3]))
+                            }
+                        }
+                        if showLinework {
+                            for seg in overlay.edges ?? [] where seg.count == 2 {
+                                var p = Path(); p.move(to: pt(seg[0][0], seg[0][1])); p.addLine(to: pt(seg[1][0], seg[1][1]))
+                                ctx.stroke(p, with: .color(.primary.opacity(0.55)), lineWidth: 0.8)
+                            }
+                            for seg in overlay.walls ?? [] where seg.count == 2 {
+                                var p = Path(); p.move(to: pt(seg[0][0], seg[0][1])); p.addLine(to: pt(seg[1][0], seg[1][1]))
+                                ctx.stroke(p, with: .color(.primary), style: StrokeStyle(lineWidth: cleanDrawing ? 2.2 : 1.8, lineCap: .round))
                             }
                         }
                         if showMeasurements {
@@ -81,8 +93,11 @@ struct SitePlanView: View {
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
 
             HStack(spacing: 14) {
+                Toggle("Line drawing", isOn: $cleanDrawing).help("Hide the orthomosaic and contours: just the traced walls, fences and edges")
+                Divider().frame(height: 14)
                 Toggle("Grid", isOn: $showGrid)
-                Toggle("Contours" + (overlay.contourInterval.map { " (\(Format.number($0)) m)" } ?? ""), isOn: $showContours)
+                Toggle("Contours" + (overlay.contourInterval.map { " (\(Format.number($0)) m)" } ?? ""), isOn: $showContours).disabled(cleanDrawing)
+                Toggle("Linework", isOn: $showLinework).disabled((overlay.walls ?? []).isEmpty && (overlay.edges ?? []).isEmpty)
                 Toggle("Footprint", isOn: $showFootprint)
                 Toggle("Measurements", isOn: $showMeasurements)
                 Spacer()

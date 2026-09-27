@@ -86,6 +86,24 @@ struct VideoInfo: Decodable, Sendable, Hashable {
         case durationS = "duration_s", colorTransfer = "color_transfer"
     }
 
+    init() {}
+
+    /// A measurements recording has an empty source: every field is optional here.
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decodeIfPresent(String.self, forKey: .path) ?? ""
+        original = try c.decodeIfPresent(String.self, forKey: .original)
+        size = try c.decodeIfPresent(Int.self, forKey: .size)
+        durationS = try c.decodeIfPresent(Double.self, forKey: .durationS)
+        width = try c.decodeIfPresent(Int.self, forKey: .width)
+        height = try c.decodeIfPresent(Int.self, forKey: .height)
+        fps = try c.decodeIfPresent(Double.self, forKey: .fps)
+        frames = try c.decodeIfPresent(Int.self, forKey: .frames)
+        colorTransfer = try c.decodeIfPresent(String.self, forKey: .colorTransfer)
+        hdr = try c.decodeIfPresent(String.self, forKey: .hdr)
+        error = try c.decodeIfPresent(String.self, forKey: .error)
+    }
+
     var isHDR: Bool { let h = hdr ?? "none"; return h != "none" && !h.isEmpty }
     /// The name the user knows the footage by (the file they imported), else the stored copy.
     var fileName: String { ((original ?? path) as NSString).lastPathComponent }
@@ -188,7 +206,7 @@ enum RunKind: String, Decodable, Sendable, Hashable, CaseIterable {
         switch self { case .scan: .model3d; case .layout: .sitePlan }
     }
     var stages: [String] {
-        switch self { case .scan: ["sfm", "dense", "landmarks", "preview"]; case .layout: ["solve", "ortho", "draw", "preview"] }
+        switch self { case .scan: ["sfm", "dense", "landmarks", "preview"]; case .layout: ["solve", "ortho", "trace", "draw", "preview"] }
     }
 }
 
@@ -203,6 +221,8 @@ struct RunSettings: Decodable, Sendable, Hashable {
     var pxPerM: Int = 50
     var contourM: Double = 0.25
     var sheetScale: Int = 100
+    var wallJumpM: Double = 0.5
+    var edgeJumpM: Double = 0.08
     var previewFaces: Int = 300_000
 
     init() {}
@@ -210,7 +230,7 @@ struct RunSettings: Decodable, Sendable, Hashable {
     enum CodingKeys: String, CodingKey {
         case features, matcher, matching, relaxed, measures
         case resLevel = "res_level", maxFaces = "max_faces", pxPerM = "px_per_m", contourM = "contour_m", sheetScale = "sheet_scale"
-        case previewFaces = "preview_faces"
+        case wallJumpM = "wall_jump_m", edgeJumpM = "edge_jump_m", previewFaces = "preview_faces"
     }
 
     init(from decoder: any Decoder) throws {
@@ -225,6 +245,8 @@ struct RunSettings: Decodable, Sendable, Hashable {
         pxPerM = try c.decodeIfPresent(Int.self, forKey: .pxPerM) ?? 50
         contourM = try c.decodeIfPresent(Double.self, forKey: .contourM) ?? 0.25
         sheetScale = try c.decodeIfPresent(Int.self, forKey: .sheetScale) ?? 100
+        wallJumpM = try c.decodeIfPresent(Double.self, forKey: .wallJumpM) ?? 0.5
+        edgeJumpM = try c.decodeIfPresent(Double.self, forKey: .edgeJumpM) ?? 0.08
         previewFaces = try c.decodeIfPresent(Int.self, forKey: .previewFaces) ?? 300_000
     }
 }
@@ -443,9 +465,11 @@ struct PlanOverlay: Decodable, Sendable, Hashable {
     var contours: [Contour]
     var footprint: [[[Double]]]
     var measurements: [Measurement]
+    var walls: [[[Double]]]?
+    var edges: [[[Double]]]?
 
     enum CodingKeys: String, CodingKey {
-        case contours, footprint, measurements
+        case contours, footprint, measurements, walls, edges
         case pxPerM = "px_per_m", xMin = "x_min", yMax = "y_max", widthPx = "width_px", heightPx = "height_px"
         case widthM = "width_m", heightM = "height_m", contourInterval = "contour_interval", sheetScale = "sheet_scale"
     }

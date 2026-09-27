@@ -123,12 +123,12 @@ def plan_measurements(work: Path, T: np.ndarray):
 
 # ---------------------------------------------------------------- DXF
 
-def write_dxf(path: Path, ortho: dict, cont, foot, meas, title: str, sub: str):
+def write_dxf(path: Path, ortho: dict, cont, foot, meas, title: str, sub: str, linework: dict | None = None):
     import ezdxf
     doc = ezdxf.new("R2010", setup=True)
     doc.header["$INSUNITS"] = 6                             # metres
     for name, color in (("ORTHO", 8), ("GRID", 253), ("GRID_MAJOR", 251), ("CONTOURS", 32), ("CONTOURS_INDEX", 30),
-                        ("FOOTPRINT", 4), ("MEASURE", 1), ("NORTH", 7), ("SCALEBAR", 7), ("TITLE", 7)):
+                        ("FOOTPRINT", 4), ("WALLS", 7), ("EDGES", 8), ("MEASURE", 1), ("NORTH", 7), ("SCALEBAR", 7), ("TITLE", 7)):
         doc.layers.add(name, color=color)
     msp = doc.modelspace()
     x0, y1, w, h = ortho["x_min"], ortho["y_max"], ortho["width_m"], ortho["height_m"]
@@ -153,6 +153,10 @@ def write_dxf(path: Path, ortho: dict, cont, foot, meas, title: str, sub: str):
             msp.add_text(f"{c['level']:.2f}", height=0.18, dxfattribs={"layer": layer}).set_placement((mx, my))
     for poly in foot:
         msp.add_lwpolyline(poly, close=True, dxfattribs={"layer": "FOOTPRINT", "linetype": "DASHED"})
+    for seg in (linework or {}).get("walls", []):
+        msp.add_lwpolyline(seg, dxfattribs={"layer": "WALLS", "const_width": 0.05})
+    for seg in (linework or {}).get("edges", []):
+        msp.add_lwpolyline(seg, dxfattribs={"layer": "EDGES"})
     for m in meas:
         dim = msp.add_aligned_dim(p1=tuple(m["a"]), p2=tuple(m["b"]), distance=0.4, text=f"{m['meters']:.2f} m",
                                   dxfattribs={"layer": "MEASURE"})
@@ -176,10 +180,11 @@ def write_dxf(path: Path, ortho: dict, cont, foot, meas, title: str, sub: str):
 
 # ---------------------------------------------------------------- PDF
 
-def write_pdf(path: Path, ortho_png: Path, ortho: dict, cont, foot, meas, title: str, sub: str, wanted_scale: int):
+def write_pdf(path: Path, ortho_png: Path, ortho: dict, cont, foot, meas, title: str, sub: str, wanted_scale: int, linework: dict | None = None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
     from matplotlib.patches import Polygon
 
     x0, y1, w, h = ortho["x_min"], ortho["y_max"], ortho["width_m"], ortho["height_m"]
@@ -189,15 +194,32 @@ def write_pdf(path: Path, ortho_png: Path, ortho: dict, cont, foot, meas, title:
     scale = next((s for s in sorted({wanted_scale, 50, 100, 200, 500, 1000}) if s >= wanted_scale
                   and (w + 3) * 1000 / s <= avail_w and (h + 3) * 1000 / s <= avail_h), 1000)
     mm = 1000.0 / scale                                     # mm on paper per metre
-    fig = plt.figure(figsize=(A2[0] / 25.4, A2[1] / 25.4))
-    aw, ah = (w + 3) * mm / A2[0], (h + 3) * mm / A2[1]
-    # centre the drawing in the area above the title block
-    left = (MARGIN + (avail_w - (w + 3) * mm) / 2) / A2[0]
-    bottom = (MARGIN + TITLE_H + (avail_h - (h + 3) * mm) / 2) / A2[1]
-    ax = fig.add_axes([left, bottom, aw, ah])
-    ax.set_xlim(x0 - 1.5, x1 + 1.5); ax.set_ylim(y0 - 1.5, y1 + 1.5); ax.set_aspect("equal"); ax.axis("off")
-    im = plt.imread(str(ortho_png))
-    ax.imshow(im, extent=[x0, x1, y0, y1], interpolation="bilinear", zorder=0)
+    pdf = PdfPages(str(path))
+    for page in ("ortho", "lines"):
+        if page == "lines" and not linework:
+            continue
+        fig = plt.figure(figsize=(A2[0] / 25.4, A2[1] / 25.4))
+        aw, ah = (w + 3) * mm / A2[0], (h + 3) * mm / A2[1]
+        # centre the drawing in the area above the title block
+        left = (MARGIN + (avail_w - (w + 3) * mm) / 2) / A2[0]
+        bottom = (MARGIN + TITLE_H + (avail_h - (h + 3) * mm) / 2) / A2[1]
+        ax = fig.add_axes([left, bottom, aw, ah])
+        ax.set_xlim(x0 - 1.5, x1 + 1.5); ax.set_ylim(y0 - 1.5, y1 + 1.5); ax.set_aspect("equal"); ax.axis("off")
+        draw_page(fig, ax, page, ortho_png, ortho, cont, foot, meas, linework, title, sub, scale, mm, A2)
+        pdf.savefig(fig)
+        plt.close(fig)
+    pdf.close()
+    return scale
+
+
+def draw_page(fig, ax, page, ortho_png, ortho, cont, foot, meas, linework, title, sub, scale, mm, A2):
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Polygon
+    x0, y1, w, h = ortho["x_min"], ortho["y_max"], ortho["width_m"], ortho["height_m"]
+    y0, x1 = y1 - h, x0 + w
+    if page == "ortho":
+        im = plt.imread(str(ortho_png))
+        ax.imshow(im, extent=[x0, x1, y0, y1], interpolation="bilinear", zorder=0)
     for gx in np.arange(np.ceil(x0), x1, 1.0):
         major = abs(gx % 5) < 1e-6
         ax.plot([gx, gx], [y0, y1], color="#66655c" if major else "#b0aea5", lw=0.5 if major else 0.25, alpha=0.7, zorder=1)
@@ -208,15 +230,20 @@ def write_pdf(path: Path, ortho_png: Path, ortho: dict, cont, foot, meas, title:
         ax.plot([x0, x1], [gy, gy], color="#66655c" if major else "#b0aea5", lw=0.5 if major else 0.25, alpha=0.7, zorder=1)
         if major:
             ax.text(x1 + 0.15, gy, f"{gy:.0f}", fontsize=5, va="center", color="#66655c")
-    for c in cont:
-        P = np.array(c["points"])
-        ax.plot(P[:, 0], P[:, 1], color="#8a5a2b", lw=0.6 if c["index"] else 0.3, zorder=2)
-        if c["index"] and len(P) > 80:
-            mx, my = P[len(P) // 2]
-            ax.text(mx, my, f"{c['level']:.2f}", fontsize=4, color="#8a5a2b", ha="center", va="center",
-                    bbox=dict(boxstyle="round,pad=0.1", fc="white", ec="none", alpha=0.7), zorder=3)
+    if page == "ortho":
+        for c in cont:
+            P = np.array(c["points"])
+            ax.plot(P[:, 0], P[:, 1], color="#8a5a2b", lw=0.6 if c["index"] else 0.3, zorder=2)
+            if c["index"] and len(P) > 80:
+                mx, my = P[len(P) // 2]
+                ax.text(mx, my, f"{c['level']:.2f}", fontsize=4, color="#8a5a2b", ha="center", va="center",
+                        bbox=dict(boxstyle="round,pad=0.1", fc="white", ec="none", alpha=0.7), zorder=3)
     for poly in foot:
-        ax.add_patch(Polygon(poly, closed=True, fill=False, ls="--", lw=0.6, ec="#2a6f97", zorder=2))
+        ax.add_patch(Polygon(poly, closed=True, fill=False, ls="--", lw=0.6, ec="#2a6f97" if page == "ortho" else "#9a9a9a", zorder=2))
+    for seg in (linework or {}).get("walls", []):
+        ax.plot([seg[0][0], seg[1][0]], [seg[0][1], seg[1][1]], color="black", lw=1.6 if page == "lines" else 1.1, solid_capstyle="round", zorder=3)
+    for seg in (linework or {}).get("edges", []):
+        ax.plot([seg[0][0], seg[1][0]], [seg[0][1], seg[1][1]], color="#333333" if page == "lines" else "#555555", lw=0.6, zorder=3)
     for m in meas:
         (ax_, ay_), (bx_, by_) = m["a"], m["b"]
         ax.plot([ax_, bx_], [ay_, by_], color="#d97757", lw=1.0, zorder=4)
@@ -235,12 +262,10 @@ def write_pdf(path: Path, ortho_png: Path, ortho: dict, cont, foot, meas, title:
                                          fc="black" if i % 2 == 0 else "white", ec="black", lw=0.5))
         fig.text(fx(bx + i * mm), fy(by - 1), f"{i}", ha="center", va="top", fontsize=6)
     fig.text(fx(bx + 5 * mm), fy(by - 1), "5 m", ha="center", va="top", fontsize=6)
-    fig.text(fx(MARGIN), fy(MARGIN + 12), title, fontsize=16, fontweight="bold", va="bottom", family="serif")
-    fig.text(fx(MARGIN), fy(MARGIN + 4), f"{sub}  ·  scale 1:{scale} on A2 {'landscape' if A2[0] > A2[1] else 'portrait'}  ·  contours every {CONTOUR_INTERVAL} m  ·  grid 1 m  ·  north up",
+    fig.text(fx(MARGIN), fy(MARGIN + 12), title + ("  ·  line drawing" if page == "lines" else ""), fontsize=16, fontweight="bold", va="bottom", family="serif")
+    detail = f"contours every {CONTOUR_INTERVAL} m" if page == "ortho" else "walls and fences traced from height steps"
+    fig.text(fx(MARGIN), fy(MARGIN + 4), f"{sub}  ·  scale 1:{scale} on A2 {'landscape' if A2[0] > A2[1] else 'portrait'}  ·  {detail}  ·  grid 1 m  ·  north up",
              fontsize=7, va="bottom", color="#66655c")
-    fig.savefig(str(path), format="pdf")
-    plt.close(fig)
-    return scale
 
 
 CONTOUR_INTERVAL = 0.25
@@ -272,11 +297,14 @@ def main() -> int:
     ppm = ortho["px_per_m"]
     (work / "orthomosaic.pgw").write_text(f"{1 / ppm:.8f}\n0\n0\n{-1 / ppm:.8f}\n{ortho['x_min'] + 0.5 / ppm:.6f}\n{ortho['y_max'] - 0.5 / ppm:.6f}\n")
     sub = a.subtitle or f"existing conditions · {date.today().isoformat()}"
-    write_dxf(work / "site_plan.dxf", ortho, cont, foot, meas, a.title, sub)
-    scale = write_pdf(work / "site_plan.pdf", work / "orthomosaic.png", ortho, cont, foot, meas, a.title, sub, a.scale)
+    lw_path = work / "linework.json"
+    linework = json.load(open(lw_path)) if lw_path.exists() else None
+    write_dxf(work / "site_plan.dxf", ortho, cont, foot, meas, a.title, sub, linework)
+    scale = write_pdf(work / "site_plan.pdf", work / "orthomosaic.png", ortho, cont, foot, meas, a.title, sub, a.scale, linework)
     json.dump({"px_per_m": ppm, "x_min": ortho["x_min"], "y_max": ortho["y_max"], "width_px": ortho["width_px"], "height_px": ortho["height_px"],
                "width_m": ortho["width_m"], "height_m": ortho["height_m"], "contour_interval": a.contour, "sheet_scale": scale,
-               "contours": cont, "footprint": foot, "measurements": meas}, open(work / "overlay.json", "w"))
+               "contours": cont, "footprint": foot, "measurements": meas,
+               "walls": (linework or {}).get("walls", []), "edges": (linework or {}).get("edges", [])}, open(work / "overlay.json", "w"))
     print(f"site plan: {len(cont)} contour lines every {a.contour} m, {len(foot)} footprint polygon(s), {len(meas)} measurements, "
           f"DEM {meta['width']}x{meta['height']} @ {a.cell} m, sheet 1:{scale}")
     return 0

@@ -143,7 +143,7 @@ Move the video to `data/backyard.mp4` (AirDrop keeps full quality; iCloud "optim
 3. **OpenMVS** (`scripts/03_dense.sh`): dense cloud, mesh, fragment cleanup + decimation to 4M faces, texture. Resumable.
 4. **Landmarks** (`scripts/04..06`, `pick_landmarks.py`): levelled unscaled preview plan, plus the measurement prompts.
 5. **Preview** (`scripts/07_preview_model.py`, Blender): the textured mesh decimated to 300k faces, textures capped at 4096², as `preview.usdz` for the app's 3D viewer (about 30 MB; the 8192² OpenMVS atlas alone would take 256 MB of GPU memory per view).
-6. **Layout** (a separate `layout` run on the 3D model): `solve_scale.py` turns the measurements into scale / level / north and a metric cloud; Blender renders the **orthomosaic** at true scale; `08_site_plan.py` builds the DEM, **contour lines** (0.25 m), the footprint, the **DXF** drawing (layers ORTHO, GRID, CONTOURS, FOOTPRINT, MEASURE, NORTH, SCALEBAR, TITLE) and a **PDF sheet** at 1:100 on A2 (auto-reduced if the site is larger).
+6. **Layout** (a separate `layout` run on the 3D model): `measure_project.py` + `solve_scale.py` turn the measurement recordings into scale / level / north and a metric cloud; Blender renders the **orthomosaic** at true scale; `09_trace_lines.py` traces **walls, fences and edges** as straight, merged, orthogonally snapped segments from height steps in the DEM (the architect's line drawing); `08_site_plan.py` builds the DEM, **contour lines** (0.25 m), the footprint, the **DXF** drawing (layers ORTHO, GRID, CONTOURS, FOOTPRINT, WALLS, EDGES, MEASURE, NORTH, SCALEBAR, TITLE) and a two-page **PDF sheet** at 1:100 on A2 (orthomosaic plan, then the line drawing).
 
 COLMAP knobs (env vars or the run form):
 

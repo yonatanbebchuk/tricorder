@@ -5,7 +5,7 @@ import Foundation
 enum ManifestStore {
     static let stageLabels: [String: String] = [
         "frames": "Frames", "sfm": "COLMAP", "dense": "OpenMVS", "landmarks": "Landmarks", "preview": "Preview",
-        "solve": "Scale & level", "ortho": "Orthomosaic", "draw": "Drawing",
+        "solve": "Scale & level", "ortho": "Orthomosaic", "trace": "Linework", "draw": "Drawing",
     ]
     static let videoExtensions: Set<String> = ["mov", "mp4", "m4v", "mkv", "avi"]
 

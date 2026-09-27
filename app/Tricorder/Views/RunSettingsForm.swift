@@ -54,6 +54,16 @@ struct LayoutSettingsForm: View {
             Text("1:100").tag(100)
             Text("1:200").tag(200)
         }
+        Picker("Trace walls above", selection: $settings.wallJumpM) {
+            Text("0.3 m step").tag(0.3)
+            Text("0.5 m step").tag(0.5)
+            Text("0.8 m step").tag(0.8)
+        }
+        Picker("Trace edges above", selection: $settings.edgeJumpM) {
+            Text("0.05 m step").tag(0.05)
+            Text("0.08 m step").tag(0.08)
+            Text("0.15 m step").tag(0.15)
+        }
         Picker("3D preview detail", selection: $settings.previewFaces) {
             Text("150k faces").tag(150_000)
             Text("300k faces").tag(300_000)

@@ -70,6 +70,9 @@ enum Format {
         case "ortho":
             if let w = m.double("width_m"), let h = m.double("height_m") { p.append(String(format: "%.0f × %.0f m", w, h)) }
             if let px = m.double("px_per_m") { p.append(String(format: "%.0f px/m", px)) }
+        case "trace":
+            if let w = m.int("walls") { p.append("\(w) wall segments") }
+            if let e = m.int("edges") { p.append("\(e) edges") }
         case "draw":
             if let c = m.int("contours") { p.append("\(c) contours") }
             if let s = m.int("sheet_scale") { p.append("1:\(s)") }

@@ -47,7 +47,7 @@ enum Pipeline {
 
     private static func settingsArgs(_ s: RunSettings, label: String) -> [String] {
         ["--res-level", "\(s.resLevel)", "--features", s.features, "--matcher", s.matcher, "--matching", s.matching,
-         "--measures", "\(s.measures)", "--max-faces", "\(s.maxFaces)", "--px-per-m", "\(s.pxPerM)", "--contour", "\(s.contourM)", "--sheet-scale", "\(s.sheetScale)",
+         "--measures", "\(s.measures)", "--max-faces", "\(s.maxFaces)", "--px-per-m", "\(s.pxPerM)", "--contour", "\(s.contourM)", "--sheet-scale", "\(s.sheetScale)", "--wall", "\(s.wallJumpM)", "--edge", "\(s.edgeJumpM)",
          "--preview-faces", "\(s.previewFaces)", "--label", label]
     }
 

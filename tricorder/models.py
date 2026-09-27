@@ -31,11 +31,11 @@ VIDEO_EXT = {".mov", ".mp4", ".m4v", ".mkv", ".avi"}
 RUN_KINDS: dict[str, dict[str, Any]] = {
     "scan": {"label": "Environment scan", "input": "recording", "output": "model3d",
              "stages": ["sfm", "dense", "landmarks", "preview"]},
-    "layout": {"label": "Layout", "input": "model3d", "output": "site_plan", "stages": ["solve", "ortho", "draw", "preview"]},
+    "layout": {"label": "Layout", "input": "model3d", "output": "site_plan", "stages": ["solve", "ortho", "trace", "draw", "preview"]},
 }
 ASSET_KINDS = {"model3d": "3D Model", "site_plan": "Site Plan"}
 STAGE_LABELS = {"frames": "Frames", "sfm": "COLMAP", "dense": "OpenMVS", "landmarks": "Landmarks", "preview": "Preview",
-                "solve": "Scale & level", "ortho": "Orthomosaic", "draw": "Drawing"}
+                "solve": "Scale & level", "ortho": "Orthomosaic", "trace": "Linework", "draw": "Drawing"}
 
 # measure/constraints.json in a layout run (written by scripts/measure_project.py from the measurement recordings,
 # read by scripts/solve_scale.py):
@@ -245,6 +245,8 @@ class RunSettings:
     max_faces: int = 4_000_000
     px_per_m: int = 50               # orthomosaic resolution
     contour_m: float = 0.25          # contour interval
+    wall_jump_m: float = 0.5         # linework: height step that counts as a wall or fence
+    edge_jump_m: float = 0.08        # linework: height step that counts as an edge or curb
     sheet_scale: int = 100           # wanted PDF sheet scale 1:N
     preview_faces: int = 300_000     # decimation target for the in-app 3D preview
 

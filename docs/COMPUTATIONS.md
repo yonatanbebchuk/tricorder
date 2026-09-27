@@ -32,7 +32,7 @@ Runs (a run consumes recordings and/or assets and publishes one asset):
 |---|---|---|---|---|
 | **Environment scan** | `scan` | one recording (video) | 3D model | frames, sfm, dense, landmarks, preview |
 | **Extend scan** | `extend` | a 3D model + one or more new recordings (video or photos) | a new 3D model | frames, register, dense, landmarks, preview |
-| **Layout** | `layout` | a 3D model + its measurements | site plan | solve, ortho, draw, preview |
+| **Layout** | `layout` | a 3D model + measurement recordings | site plan | solve, ortho, trace, draw, preview |
 
 `scan` and `layout` exist; `extend` is design.
 
@@ -131,8 +131,14 @@ LiDAR track, or two GPS-tagged photos) the same code becomes a similarity fit.
 1. *solve*: `transform.json` (scale, level, north) from the constraints; metric mesh and cloud.
 2. *ortho*: Blender orthographic top-down render at a chosen resolution (px/m) → `orthomosaic.png` + world file.
    Also a height render → `dem.tif` (32-bit, metres).
-3. *contours*: from the DEM, contour lines at 0.25 m (configurable), simplified; footprint = alpha shape of the
-   projected point cloud; both as polylines.
+3. *trace* (user request 2026-09-27: "straight clear lines like an architect would draw"): the local height range in
+   a 0.4 m window marks steps; steps above 0.5 m are walls/fences, above 0.08 m edges/curbs; the step bands are
+   skeletonised, a probabilistic Hough transform gives segments, near-collinear segments are merged, the site's
+   dominant axis is found from the long segments and segments within 12° are snapped to it or its perpendicular,
+   then merged again and isolated fragments dropped. Output `linework.json` (walls, edges). Heuristic; fence-top
+   vegetation still leaves some fragments. Better next: fit lines with RANSAC on the step mask directly, and close
+   rectangles where three sides are found.
+3b. *contours*: from the DEM, contour lines at 0.25 m (configurable), simplified; footprint from the DEM's valid area.
 4. *draw*: `ezdxf` writes `site_plan.dxf`: the orthomosaic as an IMAGE entity in metres on `ORTHO`, grid,
    contours with elevation labels, footprint, the measurement lines with dimension text on `MEASURE`, north arrow,
    scale bar, title block (environment name, date, scale, source asset ids). `site_plan.pdf` from the same

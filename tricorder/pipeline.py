@@ -43,7 +43,7 @@ DELIVERABLES = {
                 "database.db", "sparse_points.ply", "preview_plan.png", "preview_plan_grid.png", "preview_plan.json",
                 "preview_plan.blend", "transform_preview.json", "measure", "preview.usdz", "thumb.jpg"],
     "site_plan": ["transform.json", "measure", "orthomosaic.png", "orthomosaic.json", "orthomosaic.pgw", "dem.tif", "dem.json",
-                  "contours.json", "footprint.json", "overlay.json", "site_plan.dxf", "site_plan.pdf", "site_plan.blend",
+                  "contours.json", "footprint.json", "linework.json", "overlay.json", "site_plan.dxf", "site_plan.pdf", "site_plan.blend",
                   "scene_dense_metric.ply", "preview.usdz", "thumb.jpg"],
 }
 FILE_LABELS = {
@@ -65,6 +65,7 @@ FILE_LABELS = {
     "orthomosaic.pgw": "World file for the orthomosaic",
     "dem.tif": "Digital elevation model (32-bit, metres)",
     "contours.json": "Contour lines",
+    "linework.json": "Traced linework (walls, fences, edges)",
     "site_plan.blend": "Blender scene at true scale",
     "scene_dense_metric.ply": "Dense cloud in metres",
     "transform.json": "Scale / level / north + residuals",
@@ -292,6 +293,16 @@ def stage_ortho(run: Run) -> None:
     _stage(run, "ortho", fn)
 
 
+def stage_trace(run: Run) -> None:
+    """Straight, merged, snapped line segments for walls, fences and edges: the architect's line drawing."""
+    def fn(log: Path) -> dict:
+        _check(_exec([PY, str(SCRIPTS / "09_trace_lines.py"), str(run.dir), "--wall", str(run.settings.wall_jump_m),
+                      "--edge", str(run.settings.edge_jump_m)], log), "line tracing")
+        lw = json.load(open(run.dir / "linework.json"))
+        return {"walls": len(lw.get("walls", [])), "edges": len(lw.get("edges", [])), "axis_deg": lw.get("axis_deg")}
+    _stage(run, "trace", fn)
+
+
 def stage_draw(run: Run) -> None:
     """DEM, contours, footprint, DXF, PDF sheet, world file, app overlay."""
     def fn(log: Path) -> dict:
@@ -322,7 +333,7 @@ def stage_preview(run: Run) -> None:
 
 
 STAGE_FN = {"sfm": stage_sfm, "dense": stage_dense, "landmarks": stage_landmarks, "solve": stage_solve, "ortho": stage_ortho,
-            "draw": stage_draw, "preview": stage_preview}
+            "trace": stage_trace, "draw": stage_draw, "preview": stage_preview}
 
 
 # ---------------------------------------------------------------- publishing
@@ -341,6 +352,7 @@ def asset_metrics(run: Run) -> dict:
             m["prompts"] = l["prompts"]
     else:
         m.update(run.stages["solve"].metrics)
+        m.update(run.stages["trace"].metrics)
         m.update(run.stages["draw"].metrics)
         m["px_per_m"] = run.settings.px_per_m
     return m
@@ -447,7 +459,7 @@ def launch(args: list[str]) -> subprocess.Popen:
 def _settings_from(a) -> RunSettings:
     return RunSettings(res_level=a.res_level, features=a.features, matcher=a.matcher, matching=a.matching,
                        measures=a.measures, max_faces=a.max_faces, px_per_m=a.px_per_m, contour_m=a.contour, sheet_scale=a.sheet_scale,
-                       preview_faces=a.preview_faces)
+                       wall_jump_m=a.wall, edge_jump_m=a.edge, preview_faces=a.preview_faces)
 
 
 def main(argv=None) -> int:
@@ -469,6 +481,8 @@ def main(argv=None) -> int:
         p.add_argument("--px-per-m", type=int, default=50)
         p.add_argument("--contour", type=float, default=0.25)
         p.add_argument("--sheet-scale", type=int, default=100)
+        p.add_argument("--wall", type=float, default=0.5, help="linework: height step of a wall/fence (m)")
+        p.add_argument("--edge", type=float, default=0.08, help="linework: height step of an edge/curb (m)")
         p.add_argument("--preview-faces", type=int, default=300_000)
         p.add_argument("--label", default="")
         p.add_argument("--start", action="store_true", help="run the pipeline now (in this process)")

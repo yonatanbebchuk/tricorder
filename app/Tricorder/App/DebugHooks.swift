@@ -94,25 +94,31 @@ enum DebugHooks {
             return
         }
         do {
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             let mine = content.windows.filter { $0.owningApplication?.processID == getpid() && $0.frame.width > 10 }
-            guard let w = mine.first(where: { $0.windowID == CGWindowID(window.windowNumber) }) ?? mine.first,
-                  let display = content.displays.first(where: { $0.frame.contains(CGPoint(x: w.frame.midX, y: w.frame.midY)) }) ?? content.displays.first else {
+            guard let main = mine.first(where: { $0.windowID == CGWindowID(window.windowNumber) }) ?? mine.first else {
                 FileHandle.standardError.write(Data("screenshot: window not shareable (\(content.windows.count) windows visible, \(mine.count) mine)\n".utf8)); return
             }
-            // capture every window of ours on that display (sheets are separate windows), then crop to the main one
-            let cfg = SCStreamConfiguration()
+            // capture each of our windows (sheets are separate windows) and composite them over the main one
             let scale = window.backingScaleFactor
-            cfg.width = Int(display.frame.width * scale)
-            cfg.height = Int(display.frame.height * scale)
-            cfg.showsCursor = false
-            cfg.captureResolution = .best
-            let image = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: display, including: mine), configuration: cfg)
-            let sx = CGFloat(image.width) / display.frame.width, sy = CGFloat(image.height) / display.frame.height
-            let crop = CGRect(x: (w.frame.minX - display.frame.minX) * sx, y: (w.frame.minY - display.frame.minY) * sy,
-                              width: w.frame.width * sx, height: w.frame.height * sy)
-            let final = image.cropping(to: crop) ?? image
-            if let png = NSBitmapImageRep(cgImage: final).representation(using: .png, properties: [:]) { try png.write(to: url) }
+            func shot(_ w: SCWindow) async throws -> CGImage {
+                let cfg = SCStreamConfiguration()
+                cfg.width = Int(w.frame.width * scale); cfg.height = Int(w.frame.height * scale)
+                cfg.showsCursor = false; cfg.captureResolution = .best
+                return try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(desktopIndependentWindow: w), configuration: cfg)
+            }
+            let base = try await shot(main)
+            let rep = NSBitmapImageRep(cgImage: base)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            for w in mine where w.windowID != main.windowID && main.frame.intersects(w.frame) && w.windowLayer >= main.windowLayer {
+                let img = try await shot(w)
+                let x = (w.frame.minX - main.frame.minX) * scale
+                let y = CGFloat(base.height) - (w.frame.minY - main.frame.minY) * scale - CGFloat(img.height)   // flip to bottom-left origin
+                NSGraphicsContext.current?.cgContext.draw(img, in: CGRect(x: x, y: y, width: CGFloat(img.width), height: CGFloat(img.height)))
+            }
+            NSGraphicsContext.restoreGraphicsState()
+            if let png = rep.representation(using: .png, properties: [:]) { try png.write(to: url) }
         } catch {
             FileHandle.standardError.write(Data("screenshot failed: \(error)\n".utf8))
         }

@@ -1,13 +1,14 @@
-# Backyard scanner.  Scans live in work/scans/<scan>/ with runs in runs/<r>/ (all local, git-ignored).
+# Tricorder: environments (sites) hold recordings (raw video), runs (processing) and assets (3D scans, site plans).
+# Everything lives in work/environments/<env>/ (local, git-ignored).
 #
 #   make setup                                     # brew deps, Python env, OpenMVS build
-#   make ui                                        # web UI at http://127.0.0.1:8765  (upload, run, measure, plan)
 #   make app                                       # build + open the native Mac app (app/, needs Xcode 26+, xcodegen)
-#   make xcode                                     # generate app/BackyardScanner.xcodeproj and open it in Xcode
-#   make new VIDEO=data/backyard.MOV NAME="Backyard"   # create scan + run and execute it now (foreground)
-#   make run SCAN=backyard RUN=r1                  # (re)execute a run: frames if needed -> sfm -> dense -> landmarks
-#   make plan SCAN=backyard RUN=r1                 # after answering the measurement prompts
-#   make list                                      # scans and their runs
+#   make xcode                                     # generate app/Tricorder.xcodeproj and open it in Xcode
+#   make new VIDEO=data/backyard.MOV NAME="Backyard"   # environment + recording + reconstruct run, executed now (foreground)
+#   make run ENV=backyard RUN=r1                   # (re)execute a run: finished stages are kept, then the asset is published
+#   make plan ENV=backyard ASSET=scan3d-1          # site plan from a 3D scan, after answering its measurement prompts
+#   make list                                      # environments, recordings, runs, assets
+#   make migrate                                   # old work/scans layout -> work/environments
 #   make lidar LIDAR=data/stray_dataset            # alt: metric mesh from a Stray Scanner LiDAR recording
 PY       = .venv/bin/python
 BLENDER ?= /Applications/Blender.app/Contents/MacOS/Blender
@@ -20,36 +21,33 @@ MATCHER  ?= BRUTEFORCE
 MATCHING ?= vocab
 RES_LEVEL ?= 2
 
-.PHONY: setup ui app xcode new run plan list lidar migrate
+.PHONY: setup app xcode new run plan list lidar migrate
 
 setup:
 	./setup.sh
 
-ui:
-	.venv/bin/uvicorn ui.server:app --host 127.0.0.1 --port 8765 --reload
-
-app:        # native Mac app -> app/build/Build/Products/Release/Backyard Scanner.app
-	cd app && xcodegen generate --quiet && xcodebuild -project BackyardScanner.xcodeproj -scheme BackyardScanner \
-	    -configuration Release -derivedDataPath build -quiet build && open "build/Build/Products/Release/Backyard Scanner.app"
+app:        # native Mac app -> app/build/Build/Products/Release/Tricorder.app
+	cd app && xcodegen generate --quiet && xcodebuild -project Tricorder.xcodeproj -scheme Tricorder \
+	    -configuration Release -derivedDataPath build -quiet build && open "build/Build/Products/Release/Tricorder.app"
 
 xcode:
-	cd app && xcodegen generate --quiet && open BackyardScanner.xcodeproj
+	cd app && xcodegen generate --quiet && open Tricorder.xcodeproj
 
 new:
-	caffeinate -i -s $(PY) -m scanner.pipeline new $(VIDEO) --name "$(NAME)" --fps $(FPS) --max-frames $(MAXF) \
+	caffeinate -i -s $(PY) -m tricorder.pipeline new $(VIDEO) --name "$(NAME)" --fps $(FPS) --max-frames $(MAXF) \
 	    --res-level $(RES_LEVEL) --features $(FEATURES) --matcher $(MATCHER) --matching $(MATCHING) --measures $(MEASURES) --start
 
 run:
-	caffeinate -i -s $(PY) -m scanner.pipeline run $(SCAN) $(RUN)
+	caffeinate -i -s $(PY) -m tricorder.pipeline run $(ENV) $(RUN)
 
 plan:
-	$(PY) -m scanner.pipeline plan $(SCAN) $(RUN) --px-per-m $(PXM)
+	caffeinate -i -s $(PY) -m tricorder.pipeline new-run $(ENV) plan --asset $(ASSET) --px-per-m $(PXM) --start
 
 list:
-	$(PY) -m scanner.pipeline list
+	$(PY) -m tricorder.pipeline list
 
-migrate:    # import old flat work/<name> folders
-	$(PY) -m scanner.migrate
+migrate:
+	$(PY) -m tricorder.migrate
 
 lidar:
 	$(PY) scripts/lidar_fuse.py $(LIDAR) --out work/lidar/$(NAME)_lidar.ply

@@ -8,6 +8,6 @@ __pycache__/
 *-[0-9A-F]*.log
 .DS_Store
 # native Mac app: generated project and build products (app/project.yml is the source of truth)
-app/BackyardScanner.xcodeproj/
+app/Tricorder.xcodeproj/
 app/build/
 xcuserdata/

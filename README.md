@@ -1,6 +1,6 @@
-# Backyard Scanner
+# Tricorder
 
-iPhone video ➜ metric, editable 3D model of the backyard ➜ dimensioned 2D site plan.
+Point an iPhone at a place, get back a metric, editable 3D scan of it and a dimensioned 2D site plan.
 All open source, runs on a Mac mini (Apple Silicon, 24 GB), no NVIDIA GPU needed.
 
 ```
@@ -54,57 +54,47 @@ open source; it's the pragmatic escape hatch if the open pipeline struggles with
 ```
 Install Blender from blender.org into /Applications (or `brew install --cask blender`), and QCAD (`brew install --cask qcad`) for the 2D drawing.
 
-## Scans and runs
+## Environments, recordings, runs, assets
 
-All scan data is local and git-ignored (`data/`, `work/`).
+An **environment** is a place you scan (the backyard). It holds three things, all local and git-ignored under `work/`:
 
-```
-work/scans/<scan>/scan.json         one filmed walk: video metadata, frame extraction settings + stats, notes
-work/scans/<scan>/images/           extracted frames, shared by every run of the scan
-work/scans/<scan>/runs/<r>/run.json one pipeline execution: settings, per-stage status / timing / metrics, plan versions
-work/scans/<scan>/runs/<r>/logs/    one log per stage (sfm, dense, landmarks, plan)
-work/scans/<scan>/runs/<r>/         database.db, sparse/, dense/, measure/, preview_plan.*, plan.*, transform.json
-```
-`scanner/pipeline.py` orchestrates the stage scripts and keeps the manifests current; the web UI only reads them.
-Two runs of one scan is how you compare settings (e.g. SIFT vs ALIKED + LightGlue) on the same footage.
+| | what | where |
+|---|---|---|
+| **Recordings** | raw data that was sensed: the iPhone video (copied in), its metadata, the frames extracted from it | `work/environments/<env>/recordings/<rec>/` |
+| **Runs** | processing jobs. `reconstruct` turns a recording into a 3D scan; `plan` turns a measured 3D scan into a site plan. A run has stages, logs, settings and working files, and publishes exactly one asset | `work/environments/<env>/runs/<run>/` |
+| **Assets** | what runs produce: a **3D scan** (dense cloud, textured mesh, preview plan, measurement prompts, USDZ preview) or a **site plan** (scale/level/north, true-scale plan images, Blender scene, metric cloud). Files are APFS clones of the run's deliverables, so an asset costs no extra disk | `work/environments/<env>/assets/<asset>/` |
+
+Assets are never overwritten: making a plan again publishes `plan2d-2` and `plan2d-1` stays as history. The newest asset of
+each kind is the environment's *current* state. Runs can consume earlier assets (a plan run consumes a 3D scan), which is
+how one asset becomes the input of the next. `tricorder/pipeline.py` orchestrates the stage scripts and is the only
+writer of run status; the app only writes names, notes and your measurements.
 
 ## Mac app
 
 ```bash
 brew install xcodegen      # once; Xcode 26 or newer for Liquid Glass
-make app                   # builds app/ and opens Backyard Scanner.app
+make app                   # builds app/ and opens Tricorder.app
 ```
-A native SwiftUI app (macOS 26, Liquid Glass) over the same manifests and the same Python orchestrator:
-scans and their runs in the sidebar, a scan page with video facts, notes and the runs table, a run page with
-the five stages, live stage logs, the *Measure* panel, the scale result and true-scale plan, and every output.
-It watches `work/scans` with FSEvents, so what the pipeline writes appears at once, and it starts pipeline work
-with `python -m scanner.pipeline launch …` (detached, under `caffeinate`), so quitting the app never kills a run.
-The app finds the checkout it was built in on its own; Settings lets you point it elsewhere.
-Sources: `app/BackyardScanner/` (XcodeGen spec in `app/project.yml`; `make xcode` opens the project).
-
-## Web UI
-
-```bash
-make ui        # http://127.0.0.1:8765
-```
-*Scans* shows every capture with a thumbnail and its runs. *New scan* uploads a video (or picks one from
-`data/`), sets frame extraction and first-run settings, and starts. A *scan* page shows the video facts,
-notes, and a runs table (registration, dense size, plan status side by side) plus a form to start another
-run with different settings. A *run* page has the five stages with status, timing and key numbers, the log
-of whichever stage you click, warnings when registration or sharpness look bad, the *Measure* panel,
-the scale result with residuals and the true-scale plan, and every output file. Cancel, re-run, delete and
-"Show in Finder" are there too.
+A native SwiftUI app (macOS 26, Liquid Glass). The sidebar lists environments, each with *Recordings*, *Runs* and
+*Assets*. The environment page shows the current assets on top (the 3D scan in an orbitable SceneKit viewer, the site plan
+as an image), then every run linked to the asset it made, then the recordings inventory; the name is edited in place.
+An asset page has the 3D viewer, the *Measure* panel for tape measurements, and *Make Site Plan*; a run page has the
+stage chips and the live log. The app watches `work/environments` with FSEvents and starts work through
+`python -m tricorder.pipeline launch …` (detached, under `caffeinate`), so quitting the app never kills a run.
+Sources: `app/Tricorder/` (XcodeGen spec in `app/project.yml`; `make xcode` opens the project).
 
 ## Command line
 
 ```bash
-make new VIDEO=data/backyard.MOV NAME="Backyard noon" MAXF=600     # scan + run, executes now
-make run SCAN=backyard-noon RUN=r1                                  # (re)execute: finished stages are kept
-make plan SCAN=backyard-noon RUN=r1                                 # after measure/answers.json is filled
+make new VIDEO=data/backyard.MOV NAME="Backyard" MAXF=600     # environment + recording + reconstruct run, executes now
+make run ENV=backyard RUN=r1                                    # (re)execute: finished stages are kept, asset re-published
+make plan ENV=backyard ASSET=scan3d-1                           # after answering the scan's measurement prompts
 make list
-python -m scanner.pipeline new-run backyard-noon --features ALIKED --matcher LIGHTGLUE --start
+python -m tricorder.pipeline new-run backyard reconstruct --recording rec1 --features ALIKED --matcher LIGHTGLUE --start
+python -m tricorder.pipeline new-recording backyard data/evening.MOV --name "Evening walk"
+make migrate                                                    # old work/scans layout -> work/environments
 ```
-Options: `FPS`, `MAXF` (frames), `RES_LEVEL` (dense 1/2/3), `FEATURES`, `MATCHER`, `MATCHING`, `MEASURES`.
+Options: `FPS`, `MAXF` (frames), `RES_LEVEL` (dense 1/2/3), `FEATURES`, `MATCHER`, `MATCHING`, `MEASURES`, `PXM` (plan px/m).
 `run_all.sh <video> [name]` still works as a wrapper around `new`.
 
 ## Capturing the video (this is 80% of the result)
@@ -134,7 +124,8 @@ Move the video to `data/backyard.mp4` (AirDrop keeps full quality; iCloud "optim
 2. **COLMAP** (`scripts/02_sfm.sh`): features, sequential + vocab-tree matching, relaxed mapper, undistort.
 3. **OpenMVS** (`scripts/03_dense.sh`): dense cloud, mesh, fragment cleanup + decimation to 4M faces, texture. Resumable.
 4. **Landmarks** (`scripts/04..06`, `pick_landmarks.py`): levelled unscaled preview plan, plus the measurement prompts.
-5. **Plan** (`solve_scale.py` + Blender): scale / level / north from your answers, `plan_grid.png`, `plan.blend`, metric cloud.
+5. **Preview** (`scripts/07_preview_model.py`, Blender): the textured mesh decimated to 300k faces as `preview.usdz` for the app's 3D viewer.
+6. **Plan** (`solve_scale.py` + Blender, a separate `plan` run on the scan asset): scale / level / north from your answers, `plan_grid.png`, `plan.blend`, metric cloud.
 
 COLMAP knobs (env vars or the run form):
 

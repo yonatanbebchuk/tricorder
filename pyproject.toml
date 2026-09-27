@@ -1,13 +1,10 @@
 [project]
-name = "backyard-scanner"
+name = "tricorder"
 version = "0.1.0"
-description = "iPhone video -> COLMAP/OpenMVS -> metric 3D model -> 2D site plan"
+description = "Tricorder: iPhone video -> COLMAP/OpenMVS -> metric 3D scan of an environment -> dimensioned site plan"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "numpy>=1.26",
     "opencv-python>=4.9",
     "open3d>=0.19",
-    "fastapi>=0.115",
-    "uvicorn>=0.30",
-    "python-multipart>=0.0.9",
 ]

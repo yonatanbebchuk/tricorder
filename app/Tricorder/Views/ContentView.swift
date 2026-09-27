@@ -66,7 +66,7 @@ struct HomeView: View {
     @Environment(Workspace.self) private var ws
 
     var body: some View {
-        ScrollView { pageContent }
+        ScrollView { HomePage() }
         .scrollEdgeEffectStyle(.soft, for: .top)
         .navigationTitle("Tricorder")
         .dropDestination(for: URL.self) { urls, _ in
@@ -76,7 +76,13 @@ struct HomeView: View {
         }
     }
 
-    var pageContent: some View {
+}
+
+/// The home page content; a separate view so it can be rendered on its own.
+struct HomePage: View {
+    @Environment(Workspace.self) private var ws
+
+    var body: some View {
             VStack(alignment: .leading, spacing: 22) {
                 Text("Record it, \(Text("reconstruct").italic().foregroundStyle(Theme.accent)) it, plan it.").font(Theme.display(38))
                 Text("An environment is a place you scan. Its recordings are the raw footage, runs turn them into assets, and every asset stays in the history.")

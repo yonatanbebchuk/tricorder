@@ -52,7 +52,7 @@ enum DebugHooks {
 
     @MainActor
     static func render(_ ws: Workspace, to url: URL) {
-        var page = AnyView(HomeView().pageContent)
+        var page = AnyView(HomePage())
         if let route = ws.path.last {
             switch route {
             case .recording(let e, let id):

@@ -4,9 +4,9 @@
 #   make setup                                     # brew deps, Python env, OpenMVS build
 #   make app                                       # build + open the native Mac app (app/, needs Xcode 26+, xcodegen)
 #   make xcode                                     # generate app/Tricorder.xcodeproj and open it in Xcode
-#   make new VIDEO=data/backyard.MOV NAME="Backyard"   # environment + recording + reconstruct run, executed now (foreground)
+#   make new VIDEO=data/backyard.MOV NAME="Backyard"   # environment + recording + scan run, executed now (foreground)
 #   make run ENV=backyard RUN=r1                   # (re)execute a run: finished stages are kept, then the asset is published
-#   make plan ENV=backyard ASSET=scan3d-1          # site plan from a 3D scan, after answering its measurement prompts
+#   make layout ENV=backyard ASSET=model3d-1       # site plan (DXF, PDF, orthomosaic, contours) from a measured 3D model
 #   make list                                      # environments, recordings, runs, assets
 #   make migrate                                   # old work/scans layout -> work/environments
 #   make lidar LIDAR=data/stray_dataset            # alt: metric mesh from a Stray Scanner LiDAR recording
@@ -21,7 +21,7 @@ MATCHER  ?= BRUTEFORCE
 MATCHING ?= vocab
 RES_LEVEL ?= 2
 
-.PHONY: setup app xcode new run plan list lidar migrate
+.PHONY: setup app xcode new run layout list lidar migrate
 
 setup:
 	./setup.sh
@@ -40,8 +40,8 @@ new:
 run:
 	caffeinate -i -s $(PY) -m tricorder.pipeline run $(ENV) $(RUN)
 
-plan:
-	caffeinate -i -s $(PY) -m tricorder.pipeline new-run $(ENV) plan --asset $(ASSET) --px-per-m $(PXM) --start
+layout:
+	caffeinate -i -s $(PY) -m tricorder.pipeline new-run $(ENV) layout --asset $(ASSET) --px-per-m $(PXM) --start
 
 list:
 	$(PY) -m tricorder.pipeline list

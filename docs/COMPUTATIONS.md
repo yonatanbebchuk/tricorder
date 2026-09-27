@@ -1,7 +1,9 @@
 # Computations: scan, extend, layout
 
 Design for the three runs Tricorder performs on an environment, the two assets they produce, and how measurement
-works. Status: proposal (2026-09-27). Nothing here is implemented yet except what is marked *today*.
+works. Decided 2026-09-27: asset names **3D Model** and **Site Plan**; extend scans re-optimise everything (geometry
+over frame stability); 0.25 m contours, 1:100 sheets. Step 1 (vocabulary, constraints file, real site-plan outputs)
+is implemented; steps 2 and 3 are still design.
 
 ## Vocabulary
 
@@ -9,7 +11,7 @@ Using the terms surveyors, photogrammetrists and architects actually use:
 
 | Tricorder | term of art | what it is | id |
 |---|---|---|---|
-| 3D asset | **Reality Mesh** | a textured photogrammetric mesh of the site: dense point cloud, mesh, texture atlas, camera poses. "Reality capture" is the industry name for scan-derived geometry (Bentley calls the product a reality mesh; Autodesk a reality capture model). | `reality_mesh` |
+| 3D asset | **3D Model** (the trade calls it a 3D model or reality-capture model) | a textured photogrammetric mesh of the site: dense point cloud, mesh, texture atlas, camera poses. | `model3d` |
 | 2D asset | **Site Plan** (existing-conditions plan) | the architect's drawing: a top-down, north-up, true-scale plan of what is there today. Built from an **orthomosaic** (the top-down render), **contour lines**, the site **footprint**, a **1 m grid**, north arrow and scale bar, plus the measurements it was scaled with. | `site_plan` |
 
 A site plan is not a PNG. The deliverable set is:
@@ -28,27 +30,26 @@ Runs (a run consumes recordings and/or assets and publishes one asset):
 
 | run | id | input | output | stages |
 |---|---|---|---|---|
-| **Environment scan** | `scan` | one recording (video) | reality mesh | frames, sfm, dense, landmarks, preview |
-| **Extend scan** | `extend` | a reality mesh + one or more new recordings (video or photos) | a new reality mesh, same coordinate frame | frames, register, dense, landmarks, preview |
-| **Layout** | `layout` | a reality mesh + its measurements | site plan | solve, ortho, contours, draw, preview |
+| **Environment scan** | `scan` | one recording (video) | 3D model | frames, sfm, dense, landmarks, preview |
+| **Extend scan** | `extend` | a 3D model + one or more new recordings (video or photos) | a new 3D model | frames, register, dense, landmarks, preview |
+| **Layout** | `layout` | a 3D model + its measurements | site plan | solve, ortho, draw, preview |
 
-`scan` is today's `reconstruct`; `layout` is today's `plan` with more outputs; `extend` is new.
+`scan` and `layout` exist; `extend` is design.
 
-## 1. Environment scan (video → reality mesh)
+## 1. Environment scan (video → 3D model)
 
 Today's pipeline, unchanged in substance: sharpest frames at 2 fps → COLMAP (SIFT or ALIKED features, vocab-tree
 plus sequential matching, relaxed mapper) → undistort → OpenMVS densify, mesh, clean, texture → levelled preview
-plan and measurement prompts → USDZ preview. The reality mesh asset carries the **camera poses** (`sparse/` in
+plan and measurement prompts → USDZ preview. The 3D model asset carries the **camera poses** (`sparse/` in
 COLMAP text format) and the COLMAP **database** alongside the mesh, because the next two runs need them.
 
 Coordinate frame: COLMAP's, arbitrary scale and orientation. Everything measured is expressed in this frame;
 `transform_preview.json` (level only) and `transform.json` (scale, level, north) map it to metres.
 
-## 2. Extend scan (reality mesh + new footage → improved reality mesh)
+## 2. Extend scan (3D model + new footage → improved 3D model)
 
 The point is to add coverage (a corner you missed, the far side of the shed, close-ups of a wall) or to fill
-holes, without throwing away what worked and, crucially, **without changing the coordinate frame**, so every
-measurement already entered stays valid.
+holes, without throwing away what worked.
 
 Two ways to do it; the second is the recommendation.
 
@@ -59,32 +60,33 @@ unknown scale on partially overlapping outdoor scenes fails quietly, and texture
 re-baked.
 
 **B. Incremental structure-from-motion into the existing model** (recommended). COLMAP supports registering new
-images into an existing reconstruction; that is how photogrammetry suites do "add photos to project":
+images into an existing reconstruction; that is how photogrammetry suites do "add photos to project". Decision
+(2026-09-27): the old poses are **not** held fixed; the final bundle adjustment re-optimises everything for the best
+geometry, the frame drifts a little, old depth maps are recomputed, and the measurements are re-prompted (the
+constraint *points* can be re-projected into the new frame via their frames' new poses, so most tape values survive
+as suggestions). Time is acceptable; geometry is what matters.
 
 1. *frames*: extract frames from each new recording (photos: convert HEIC → JPEG, cap the long side).
 2. *register*: copy the mesh asset's `database.db` and `sparse/` into the run; `feature_extractor` on the new
    images only (same feature type as the original, it is recorded in the asset); `vocab_tree_matcher` of the new
    images against **all** images plus `sequential_matcher` within each new video; `image_registrator` to pose the
-   new images into the existing model; `point_triangulator` for the new tracks; `bundle_adjuster` with the
-   **existing camera poses fixed** (`--BundleAdjustment.refine_extrinsics 0` on the old images) so the frame does
-   not drift; `image_undistorter` for the union.
-3. *dense*: OpenMVS on the union. It skips depth maps that already exist, so the old images' `.dmap` files are
-   cloned from the input asset and only the new images are densified; mesh, clean and texture run on everything
-   (they are the cheaper half). Risk to verify: depth-map files are numbered by image index in `scene.mvs`, so the
-   new images must come after the old ones in `images.txt` (they do, COLMAP assigns increasing ids).
+   new images into the existing model; `point_triangulator` for the new tracks; a full `bundle_adjuster` over old
+   and new images; `image_undistorter` for the union.
+3. *dense*: OpenMVS on the union, all depth maps recomputed (the poses moved); mesh, clean and texture.
 4. *landmarks* and *preview* as in a scan.
 
-Output: `reality_mesh-2`, with `derived_from: reality_mesh-1` and the same frame. Measurements from the parent
-are copied to the child. Quality metrics on the run: registered new frames, new dense points, mesh faces before /
+Output: `model3d-2`, with `derived_from: model3d-1`. Measurements from the parent are re-projected into the new
+frame through their frames' new poses and offered as suggestions to confirm. Quality metrics on the run: registered new frames, new dense points, mesh faces before /
 after, and a coverage number (fraction of the previous footprint that got a second look).
 
 If the user wants a *cleaner* mesh from the same footage (other features, other dense level), that is simply a
 new `scan` run; it produces a new frame and the measurements do not carry over.
 
-Cost on the M4: features + matching for the new frames only (minutes to tens of minutes), densify only the new
-frames, then full mesh + texture (about an hour for a 600-frame yard). A full scan is several hours.
+Cost on the M4: features + matching for the new frames only (minutes to tens of minutes), then a full densify,
+mesh and texture (a few hours for a 600-frame yard), about the same as a scan of the union but without redoing
+feature matching for the old frames.
 
-## 3. Layout (reality mesh + measurements → site plan)
+## 3. Layout (3D model + measurements → site plan)
 
 ### 3.1 Measurements: three ways to say how big things are
 
@@ -108,7 +110,7 @@ points in the mesh's coordinate frame. The solver does not care where a constrai
 Two other constraint kinds, both *today*: **level** (three ground points you confirm, else the dominant plane
 that faces the cameras' "up") and **north** (compass bearing of one frame, or later: a direction drawn on the plan).
 
-The measurement file becomes `measure/constraints.json` on the reality mesh asset (replacing `answers.json`; the
+The measurement file becomes `measure/constraints.json` on the 3D model asset (replacing `answers.json`; the
 prompts stay in `prompts.json` as suggestions). Each constraint records its source so residuals can be judged:
 a 2 % disagreement between two tape measures is a mistake, between a tape and a photo pick it is expected.
 
@@ -138,7 +140,7 @@ the image, both in metres), and offers Open in QCAD / Blender / Preview.
 - Recording kinds: `video` (*today*) and `photos` (a folder of stills; frames stage converts and caps size).
 - `Asset.derived_from: id?` for extended meshes; `Asset.frame: id` naming the coordinate frame (the id of the
   first scan asset in the chain) so the app knows which measurements apply to which mesh.
-- Reality mesh deliverables gain `database.db` and `sparse/` (poses) so extend and snapshot-picking work from the
+- 3D model deliverables gain `database.db` and `sparse/` (poses) so extend and snapshot-picking work from the
   asset alone, not from the run's working folder.
 - Site plan deliverables as listed above.
 - Migration: rename kinds in place (`scan3d → reality_mesh`, `plan2d → site_plan`, `reconstruct → scan`,

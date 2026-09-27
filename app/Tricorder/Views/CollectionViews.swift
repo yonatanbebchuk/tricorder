@@ -49,7 +49,7 @@ struct RunsView: View {
 
     var pageContent: some View {
         VStack(alignment: .leading, spacing: 18) {
-            PageHeader(title: "Runs", env: record, lead: "Processing jobs. A reconstruction turns a recording into a 3D scan; a plan run turns a measured 3D scan into a site plan. Each run publishes one asset.")
+            PageHeader(title: "Runs", env: record, lead: "Processing jobs. An environment scan turns a recording into a 3D model; a layout turns a measured 3D model into a site plan. Each run publishes one asset.")
             Card("") { RunsTable(env: record, runs: record.runs.reversed()) }
         }
         .padding(28)

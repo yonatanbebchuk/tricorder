@@ -191,6 +191,7 @@ struct NewRunSheet: View {
 
     @State private var kind: RunKind
     @State private var inputId: String?
+    @State private var inputTouched = false
     @State private var settings = RunSettings()
     @State private var label = ""
     @State private var busy = false
@@ -202,17 +203,17 @@ struct NewRunSheet: View {
     }
 
     private var env: EnvironmentRecord? { ws.environment(request.envId) }
-    private var scans: [AssetRecord] { env?.assets.filter { $0.asset.kind == .scan3d }.reversed() ?? [] }
+    private var scans: [AssetRecord] { env?.assets.filter { $0.asset.kind == .model3d }.reversed() ?? [] }
 
     var body: some View {
-        SheetFrame(title: "New run", lead: "A run consumes a recording or an earlier asset and publishes one new asset. Earlier assets stay in the history.",
+        SheetFrame(title: "New run", lead: "An environment scan turns a recording into a 3D model; a layout turns a measured 3D model into a site plan. Each run publishes one new asset; earlier assets stay in the history.",
                    width: 640, height: 560) {
             Section("What to make") {
                 Picker("Kind", selection: $kind) {
                     ForEach(RunKind.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                if kind == .reconstruct {
+                if kind == .scan {
                     Picker("Recording", selection: $inputId) {
                         Text("—").tag(String?.none)
                         ForEach(env?.recordings ?? []) { r in
@@ -220,19 +221,19 @@ struct NewRunSheet: View {
                         }
                     }
                 } else {
-                    Picker("3D scan", selection: $inputId) {
+                    Picker("3D model", selection: $inputId) {
                         Text("—").tag(String?.none)
                         ForEach(scans) { a in
                             Text("\(a.asset.name) · \(a.answeredCount) measurement\(a.answeredCount == 1 ? "" : "s") · \(Format.when(a.asset.createdAt))").tag(String?.some(a.asset.id))
                         }
                     }
                     if let id = inputId, let a = env?.asset(id), a.answeredCount == 0 {
-                        Text("This scan has no measurements yet; the plan run would fail. Open the scan and enter at least one.").font(.caption).foregroundStyle(Theme.bad)
+                        Text("This model has no measurements yet; the layout would fail. Open the model and enter at least one.").font(.caption).foregroundStyle(Theme.bad)
                     }
                 }
             }
             Section("Settings") {
-                if kind == .reconstruct { ReconstructSettingsForm(settings: $settings) } else { PlanSettingsForm(settings: $settings) }
+                if kind == .scan { ReconstructSettingsForm(settings: $settings) } else { LayoutSettingsForm(settings: $settings) }
                 TextField("Label", text: $label, prompt: Text("optional, e.g. learned features"))
             }
         } footer: {
@@ -243,10 +244,10 @@ struct NewRunSheet: View {
                 .disabled(inputId == nil || busy)
         }
         .onChange(of: kind) { _, k in
-            if k == .reconstruct { inputId = env?.recordings.first?.rec.id } else { inputId = scans.first?.asset.id }
+            if k == .scan { inputId = env?.recordings.first?.rec.id } else { inputId = scans.first?.asset.id }
         }
         .task {
-            if inputId == nil { inputId = kind == .reconstruct ? env?.recordings.first?.rec.id : scans.first?.asset.id }
+            if inputId == nil { inputId = kind == .scan ? env?.recordings.first?.rec.id : scans.first?.asset.id }
         }
     }
 

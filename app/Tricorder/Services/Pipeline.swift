@@ -47,7 +47,7 @@ enum Pipeline {
 
     private static func settingsArgs(_ s: RunSettings, label: String) -> [String] {
         ["--res-level", "\(s.resLevel)", "--features", s.features, "--matcher", s.matcher, "--matching", s.matching,
-         "--measures", "\(s.measures)", "--max-faces", "\(s.maxFaces)", "--px-per-m", "\(s.pxPerM)",
+         "--measures", "\(s.measures)", "--max-faces", "\(s.maxFaces)", "--px-per-m", "\(s.pxPerM)", "--contour", "\(s.contourM)", "--sheet-scale", "\(s.sheetScale)",
          "--preview-faces", "\(s.previewFaces)", "--label", label]
     }
 
@@ -75,7 +75,7 @@ enum Pipeline {
 
     /// Create a run and start it detached.
     static func createRun(root: URL, envId: String, kind: RunKind, inputId: String, settings: RunSettings, label: String) async throws -> String {
-        let input = kind == .reconstruct ? ["--recording", inputId] : ["--asset", inputId]
+        let input = kind == .scan ? ["--recording", inputId] : ["--asset", inputId]
         let out = try await run(root: root, ["new-run", envId, kind.rawValue] + input + settingsArgs(settings, label: label))
         guard let id = ids(out)["run"] else { throw PipelineError("no run id returned") }
         try await start(root: root, envId: envId, runId: id)

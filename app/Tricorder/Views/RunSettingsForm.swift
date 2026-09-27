@@ -34,15 +34,25 @@ struct ReconstructSettingsForm: View {
     }
 }
 
-/// The plan render knobs.
-struct PlanSettingsForm: View {
+/// The layout knobs.
+struct LayoutSettingsForm: View {
     @Binding var settings: RunSettings
 
     var body: some View {
-        Picker("Plan resolution", selection: $settings.pxPerM) {
+        Picker("Orthomosaic resolution", selection: $settings.pxPerM) {
             Text("25 px per metre").tag(25)
             Text("50 px per metre").tag(50)
             Text("100 px per metre").tag(100)
+        }
+        Picker("Contour interval", selection: $settings.contourM) {
+            Text("0.10 m").tag(0.1)
+            Text("0.25 m").tag(0.25)
+            Text("0.50 m").tag(0.5)
+        }
+        Picker("Sheet scale", selection: $settings.sheetScale) {
+            Text("1:50").tag(50)
+            Text("1:100").tag(100)
+            Text("1:200").tag(200)
         }
         Picker("3D preview detail", selection: $settings.previewFaces) {
             Text("150k faces").tag(150_000)

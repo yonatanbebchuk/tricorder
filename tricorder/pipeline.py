@@ -1,16 +1,16 @@
 """Pipeline orchestrator: runs the stage scripts for a run and keeps the manifests current.
 
     python -m tricorder.pipeline new data/backyard.MOV --name "Backyard" [--fps 2 --max-frames 600 ...] [--start]
-                                       # environment + recording + reconstruct run in one go
+                                       # environment + recording + scan run in one go
     python -m tricorder.pipeline new-env "Backyard"
     python -m tricorder.pipeline new-recording <env> data/walk.MOV [--name ... --fps 2 --max-frames 400 --hdr auto]
-    python -m tricorder.pipeline new-run <env> reconstruct --recording rec1 [--features ALIKED ...] [--start]
-    python -m tricorder.pipeline new-run <env> plan --asset scan3d-1 [--px-per-m 50] [--start]
+    python -m tricorder.pipeline new-run <env> scan --recording rec1 [--features ALIKED ...] [--start]
+    python -m tricorder.pipeline new-run <env> layout --asset model3d-1 [--px-per-m 50 --contour 0.25] [--start]
     python -m tricorder.pipeline run    <env> <run> [--redo preview]   # execute (finished stages kept unless redone), publish
     python -m tricorder.pipeline launch run <env> <run>      # same, detached (own session, caffeinate); used by the Mac app
     python -m tricorder.pipeline list
 
-Stage scripts are unchanged (scripts/01..07, 02_sfm.sh, 03_dense.sh, pick_landmarks.py, solve_scale.py); this module
+Stage scripts (scripts/01..08, 02_sfm.sh, 03_dense.sh, pick_landmarks.py, solve_scale.py) do the work; this module
 only decides what to run, where to log, records status + metrics, and publishes the run's deliverables as an asset.
 """
 from __future__ import annotations
@@ -35,25 +35,33 @@ BLENDER = os.environ.get("BLENDER", "/Applications/Blender.app/Contents/MacOS/Bl
 
 # What a run hands over to its asset (paths relative to the run dir; globs allowed; directories are copied whole).
 DELIVERABLES = {
-    "scan3d": ["dense/scene_dense.ply", "dense/scene_dense_mesh_clean.ply", "dense/scene_dense_mesh_texture.obj",
-               "dense/scene_dense_mesh_texture.mtl", "dense/scene_dense_mesh_texture_*_map_Kd.jpg", "sparse_points.ply",
-               "preview_plan.png", "preview_plan_grid.png", "preview_plan.json", "preview_plan.blend",
-               "transform_preview.json", "measure", "preview.usdz", "thumb.jpg"],
-    "plan2d": ["transform.json", "plan.png", "plan_grid.png", "plan.json", "plan.blend", "scene_dense_metric.ply",
-               "preview.usdz", "thumb.jpg"],
+    "model3d": ["dense/scene_dense.ply", "dense/scene_dense_mesh_clean.ply", "dense/scene_dense_mesh_texture.obj",
+                "dense/scene_dense_mesh_texture.mtl", "dense/scene_dense_mesh_texture_*_map_Kd.jpg", "dense/sparse",
+                "database.db", "sparse_points.ply", "preview_plan.png", "preview_plan_grid.png", "preview_plan.json",
+                "preview_plan.blend", "transform_preview.json", "measure", "preview.usdz", "thumb.jpg"],
+    "site_plan": ["transform.json", "orthomosaic.png", "orthomosaic.json", "orthomosaic.pgw", "dem.tif", "dem.json",
+                  "contours.json", "footprint.json", "overlay.json", "site_plan.dxf", "site_plan.pdf", "site_plan.blend",
+                  "scene_dense_metric.ply", "preview.usdz", "thumb.jpg"],
 }
 FILE_LABELS = {
     "sparse_points.ply": "Sparse point cloud (COLMAP)",
     "dense/scene_dense.ply": "Dense point cloud",
     "dense/scene_dense_mesh_clean.ply": "Mesh, cleaned + decimated",
     "dense/scene_dense_mesh_texture.obj": "Textured mesh (OBJ + MTL + JPG)",
+    "dense/sparse/images.txt": "Camera poses (COLMAP)",
+    "database.db": "COLMAP database (features, matches)",
     "preview_plan_grid.png": "Preview plan, unscaled, 1 m grid",
     "preview_plan.blend": "Preview Blender scene",
     "measure/prompts.json": "Measurement prompts",
+    "measure/constraints.json": "Measurements",
     "preview.usdz": "3D preview (USDZ)",
-    "plan_grid.png": "Site plan, true scale, 1 m grid",
-    "plan.png": "Site plan, true scale, plain",
-    "plan.blend": "Blender scene at true scale",
+    "site_plan.dxf": "Site plan, CAD drawing (DXF)",
+    "site_plan.pdf": "Site plan, sheet (PDF)",
+    "orthomosaic.png": "Orthomosaic (top-down, true scale)",
+    "orthomosaic.pgw": "World file for the orthomosaic",
+    "dem.tif": "Digital elevation model (32-bit, metres)",
+    "contours.json": "Contour lines",
+    "site_plan.blend": "Blender scene at true scale",
     "scene_dense_metric.ply": "Dense cloud in metres",
     "transform.json": "Scale / level / north + residuals",
 }
@@ -111,9 +119,9 @@ def create_run(env: Environment, kind: str, inputs: dict[str, str], settings: Ru
               settings=settings or RunSettings(), label=label)
     run.save()
     (run.dir / "logs").mkdir(exist_ok=True)
-    if kind == "reconstruct":
+    if kind == "scan":
         _link(run.dir / "images", f"../../recordings/{rec.id}/images")
-    else:                                    # the plan stage scripts expect dense/ and measure/ next to their work dir
+    else:                                    # the layout scripts expect dense/ and measure/ next to their work dir
         _link(run.dir / "dense", f"../../assets/{asset.id}/dense")
         _link(run.dir / "measure", f"../../assets/{asset.id}/measure")
     return run
@@ -228,20 +236,46 @@ def stage_landmarks(run: Run) -> None:
     _stage(run, "landmarks", fn)
 
 
-def stage_plan(run: Run) -> None:
+def stage_solve(run: Run) -> None:
+    """Scale, level and north from the measurements; the dense cloud in metres."""
     def fn(log: Path) -> dict:
         _check(_exec([PY, str(SCRIPTS / "solve_scale.py"), str(run.dir)], log), "scale solve")
-        render_plan(run, run.dir / "transform.json", "plan", log, run.settings.px_per_m)
         rc = _exec([PY, "-c", (
             "import json,sys,numpy as np,open3d as o3d;from pathlib import Path;w=Path(sys.argv[1]);"
             "T=np.array(json.load(open(w/'transform.json'))['matrix']);p=o3d.io.read_point_cloud(str(w/'dense/scene_dense.ply'));"
             "p.transform(T);o3d.io.write_point_cloud(str(w/'scene_dense_metric.ply'),p);e=p.get_axis_aligned_bounding_box().get_extent();"
             "print(f'metric cloud: {e[0]:.1f} m x {e[1]:.1f} m, height {e[2]:.1f} m')"), str(run.dir)], log)
         _check(rc, "metric cloud")
-        if (run.dir / "plan_grid.png").exists():
-            metrics.make_thumbnail(run.dir / "plan_grid.png", run.dir / "thumb.jpg")
         return metrics.plan_metrics(run.dir)
-    _stage(run, "plan", fn)
+    _stage(run, "solve", fn)
+
+
+def stage_ortho(run: Run) -> None:
+    """Blender: orthographic top-down render at true scale (the orthomosaic) and the Blender scene."""
+    def fn(log: Path) -> dict:
+        if not os.path.exists(BLENDER):
+            raise RuntimeError(f"Blender not found at {BLENDER}")
+        _check(_exec([BLENDER, "--background", "--python", str(SCRIPTS / "05_site_plan_blender.py"), "--",
+                      "--mesh", str(run.dir / "dense" / "scene_dense_mesh_texture.obj"), "--transform", str(run.dir / "transform.json"),
+                      "--out", str(run.dir / "orthomosaic"), "--px-per-m", str(run.settings.px_per_m)], log), "Blender render")
+        os.replace(run.dir / "orthomosaic.blend", run.dir / "site_plan.blend")
+        metrics.make_thumbnail(run.dir / "orthomosaic.png", run.dir / "thumb.jpg")
+        o = json.load(open(run.dir / "orthomosaic.json"))
+        return {"px_per_m": o.get("px_per_m"), "width_m": o.get("width_m"), "height_m": o.get("height_m")}
+    _stage(run, "ortho", fn)
+
+
+def stage_draw(run: Run) -> None:
+    """DEM, contours, footprint, DXF, PDF sheet, world file, app overlay."""
+    def fn(log: Path) -> dict:
+        env = Environment.load(run.env_id)
+        _check(_exec([PY, str(SCRIPTS / "08_site_plan.py"), str(run.dir), "--contour", str(run.settings.contour_m),
+                      "--scale", str(run.settings.sheet_scale), "--title", env.name,
+                      "--subtitle", f"existing conditions · {run.env_id} · {run.inputs.get('asset', '')} · {now()[:10]}"], log), "site plan drawing")
+        o = json.load(open(run.dir / "overlay.json"))
+        return {"contours": len(o.get("contours", [])), "measurements": len(o.get("measurements", [])),
+                "sheet_scale": o.get("sheet_scale"), "contour_interval": o.get("contour_interval")}
+    _stage(run, "draw", fn)
 
 
 def stage_preview(run: Run) -> None:
@@ -249,7 +283,7 @@ def stage_preview(run: Run) -> None:
     def fn(log: Path) -> dict:
         if not os.path.exists(BLENDER):
             raise RuntimeError(f"Blender not found at {BLENDER}")
-        transform = run.dir / ("transform.json" if run.kind == "plan" else "transform_preview.json")
+        transform = run.dir / ("transform.json" if run.kind == "layout" else "transform_preview.json")
         cmd = [BLENDER, "--background", "--python", str(SCRIPTS / "07_preview_model.py"), "--",
                "--mesh", str(run.dir / "dense" / "scene_dense_mesh_texture.obj"), "--faces", str(run.settings.preview_faces),
                "--out", str(run.dir / "preview.usdz")]
@@ -260,14 +294,15 @@ def stage_preview(run: Run) -> None:
     _stage(run, "preview", fn)
 
 
-STAGE_FN = {"sfm": stage_sfm, "dense": stage_dense, "landmarks": stage_landmarks, "plan": stage_plan, "preview": stage_preview}
+STAGE_FN = {"sfm": stage_sfm, "dense": stage_dense, "landmarks": stage_landmarks, "solve": stage_solve, "ortho": stage_ortho,
+            "draw": stage_draw, "preview": stage_preview}
 
 
 # ---------------------------------------------------------------- publishing
 
 def asset_metrics(run: Run) -> dict:
     m: dict = {}
-    if run.kind == "reconstruct":
+    if run.kind == "scan":
         s, d, l = run.stages["sfm"].metrics, run.stages["dense"].metrics, run.stages["landmarks"].metrics
         for k in ("registered", "images", "submodels", "reproj_px"):
             if k in s:
@@ -278,7 +313,8 @@ def asset_metrics(run: Run) -> dict:
         if "prompts" in l:
             m["prompts"] = l["prompts"]
     else:
-        m.update(run.stages["plan"].metrics)
+        m.update(run.stages["solve"].metrics)
+        m.update(run.stages["draw"].metrics)
         m["px_per_m"] = run.settings.px_per_m
     return m
 
@@ -293,7 +329,7 @@ def publish(run: Run) -> Asset:
     for pattern in DELIVERABLES[kind]:
         for src in sorted(glob.glob(str(run.dir / pattern))):
             src = Path(src)
-            if src.is_symlink() and src.is_dir():          # a plan run's measure/ link points at its input asset
+            if src.is_symlink():                            # a layout run's dense/ and measure/ links point at its input asset
                 continue
             rel = src.relative_to(run.dir)
             clone(src, asset.dir / rel)
@@ -339,7 +375,7 @@ def run_pipeline(env_id: str, run_id: str, redo: list[str] | None = None) -> int
     _install_cancel_handler()
     rec = None
     try:
-        if run.kind == "reconstruct":
+        if run.kind == "scan":
             rec = Recording.load(env_id, run.inputs["recording"])
             if rec.frames.status != "done" or not (rec.dir / "images" / "frames.csv").exists():
                 stage_frames(rec)
@@ -383,7 +419,8 @@ def launch(args: list[str]) -> subprocess.Popen:
 
 def _settings_from(a) -> RunSettings:
     return RunSettings(res_level=a.res_level, features=a.features, matcher=a.matcher, matching=a.matching,
-                       measures=a.measures, max_faces=a.max_faces, px_per_m=a.px_per_m, preview_faces=a.preview_faces)
+                       measures=a.measures, max_faces=a.max_faces, px_per_m=a.px_per_m, contour_m=a.contour, sheet_scale=a.sheet_scale,
+                       preview_faces=a.preview_faces)
 
 
 def main(argv=None) -> int:
@@ -403,19 +440,21 @@ def main(argv=None) -> int:
         p.add_argument("--measures", type=int, default=4)
         p.add_argument("--max-faces", type=int, default=4_000_000)
         p.add_argument("--px-per-m", type=int, default=50)
+        p.add_argument("--contour", type=float, default=0.25)
+        p.add_argument("--sheet-scale", type=int, default=100)
         p.add_argument("--preview-faces", type=int, default=300_000)
         p.add_argument("--label", default="")
         p.add_argument("--start", action="store_true", help="run the pipeline now (in this process)")
 
-    p = sub.add_parser("new", help="environment + recording + reconstruct run from a video")
+    p = sub.add_parser("new", help="environment + recording + scan run from a video")
     p.add_argument("video"); p.add_argument("--name"); add_frame_args(p); add_run_settings(p)
     p = sub.add_parser("new-env", help="create an empty environment"); p.add_argument("name")
     p = sub.add_parser("new-recording", help="add a video to an environment")
     p.add_argument("env_id"); p.add_argument("video"); p.add_argument("--name"); add_frame_args(p)
     p = sub.add_parser("new-run", help="add a run to an environment")
     p.add_argument("env_id"); p.add_argument("kind", choices=list(RUN_KINDS))
-    p.add_argument("--recording", help="input recording id (reconstruct)")
-    p.add_argument("--asset", help="input asset id (plan)")
+    p.add_argument("--recording", help="input recording id (scan)")
+    p.add_argument("--asset", help="input 3D-model asset id (layout)")
     add_run_settings(p)
     p = sub.add_parser("run", help="execute a run; finished stages are kept unless --redo names them")
     p.add_argument("env_id"); p.add_argument("run_id")
@@ -428,7 +467,7 @@ def main(argv=None) -> int:
     if a.cmd == "new":
         env = create_environment(a.name or Path(a.video).stem)
         rec = create_recording(env, Path(a.video), a.name, FrameSettings(fps=a.fps, max_frames=a.max_frames, hdr=a.hdr))
-        run = create_run(env, "reconstruct", {"recording": rec.id}, _settings_from(a), a.label)
+        run = create_run(env, "scan", {"recording": rec.id}, _settings_from(a), a.label)
         print(f"env {env.id}  recording {rec.id}  run {run.id}  -> {run.dir}")
         return run_pipeline(env.id, run.id) if a.start else 0
     if a.cmd == "new-env":
@@ -442,9 +481,9 @@ def main(argv=None) -> int:
         return 0
     if a.cmd == "new-run":
         env = Environment.load(a.env_id)
-        inputs = {"recording": a.recording} if a.kind == "reconstruct" else {"asset": a.asset}
+        inputs = {"recording": a.recording} if a.kind == "scan" else {"asset": a.asset}
         if not next(iter(inputs.values())):
-            ap.error("reconstruct needs --recording, plan needs --asset")
+            ap.error("scan needs --recording, layout needs --asset")
         run = create_run(env, a.kind, inputs, _settings_from(a), a.label)
         print(f"env {env.id}  run {run.id}  -> {run.dir}")
         return run_pipeline(env.id, run.id) if a.start else 0

@@ -63,10 +63,16 @@ enum Format {
         case "landmarks":
             if let n = m.int("prompts") { p.append("\(n) prompts") }
             if let s = m.int("structural"), s > 0 { p.append("\(s) structural") }
-        case "plan":
+        case "solve":
             if let s = m.double("scale") { p.append(String(format: "scale %.4f", s)) }
             if let n = m.int("measurements") { p.append("\(n) meas.") }
             if let r = m.double("max_residual_cm") { p.append(String(format: "±%.1f cm", r)) }
+        case "ortho":
+            if let w = m.double("width_m"), let h = m.double("height_m") { p.append(String(format: "%.0f × %.0f m", w, h)) }
+            if let px = m.double("px_per_m") { p.append(String(format: "%.0f px/m", px)) }
+        case "draw":
+            if let c = m.int("contours") { p.append("\(c) contours") }
+            if let s = m.int("sheet_scale") { p.append("1:\(s)") }
         case "preview":
             if let f = m.double("faces"), f > 0 { p.append(String(format: "%.0fk faces", f / 1e3)) }
             if let s = m.int("size"), s > 0 { p.append(size(s)) }
@@ -78,8 +84,8 @@ enum Format {
     static func settingsLine(_ run: Run) -> String {
         let s = run.settings
         switch run.kind {
-        case .reconstruct: return "\(s.features)+\(s.matcher == "LIGHTGLUE" ? "LightGlue" : "BF") · \(s.matching) · dense L\(s.resLevel) · \(s.measures) meas."
-        case .plan: return "\(s.pxPerM) px/m"
+        case .scan: return "\(s.features)+\(s.matcher == "LIGHTGLUE" ? "LightGlue" : "BF") · \(s.matching) · dense L\(s.resLevel) · \(s.measures) meas."
+        case .layout: return "\(s.pxPerM) px/m · contours \(number(s.contourM)) m · 1:\(s.sheetScale)"
         }
     }
 
@@ -88,16 +94,17 @@ enum Format {
         let m = a.metrics
         var t: [(String, String)] = []
         switch a.kind {
-        case .scan3d:
+        case .model3d:
             if let r = m.int("registered") { t.append(("\(r)" + (m.int("images").map { " / \($0)" } ?? ""), "frames registered")) }
             if let d = m.double("dense_points"), d > 0 { t.append((String(format: "%.1fM", d / 1e6), "dense points")) }
             if let f = m.double("faces"), f > 0 { t.append((String(format: "%.1fM", f / 1e6), "mesh faces")) }
             if let p = m.int("prompts") { t.append(("\(p)", "measurement prompts")) }
-        case .plan2d:
+        case .sitePlan:
             if let s = m.double("scale") { t.append((String(format: "%.4f", s), "m per model unit")) }
-            if let n = m.int("measurements") { t.append(("\(n)", "measurements used")) }
+            if let n = m.int("measurements") { t.append(("\(n)", "measurements")) }
             if let r = m.double("max_residual_cm") { t.append((String(format: "±%.1f cm", r), "worst residual")) }
-            if let p = m.int("px_per_m") { t.append(("\(p)", "px per metre")) }
+            if let c = m.int("contours") { t.append(("\(c)", "contour lines")) }
+            if let s = m.int("sheet_scale") { t.append(("1:\(s)", "sheet scale")) }
         }
         return t
     }

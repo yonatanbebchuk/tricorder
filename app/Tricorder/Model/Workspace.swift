@@ -143,7 +143,7 @@ final class Workspace {
         newRecordingFor = EnvRef(id: env)
     }
 
-    func requestNewRun(env: String, kind: RunKind = .reconstruct, inputId: String? = nil) {
+    func requestNewRun(env: String, kind: RunKind = .scan, inputId: String? = nil) {
         newRunRequest = NewRunRequest(envId: env, kind: kind, inputId: inputId)
     }
 
@@ -171,7 +171,7 @@ final class Workspace {
         return await attempt("Adding the recording failed") {
             let rec = try await Pipeline.createRecording(root: root, envId: env, video: video, name: name, frames: frames)
             if let settings = reconstruct {
-                let run = try await Pipeline.createRun(root: root, envId: env, kind: .reconstruct, inputId: rec, settings: settings, label: label)
+                let run = try await Pipeline.createRun(root: root, envId: env, kind: .scan, inputId: rec, settings: settings, label: label)
                 await refresh()
                 open(.run(env, run))
             } else {
@@ -254,10 +254,10 @@ final class Workspace {
         }
     }
 
-    func saveAnswer(_ a: AssetRecord, promptId: String, answer: Answer?) async {
+    func updateConstraints(_ a: AssetRecord, _ mutate: @escaping @Sendable (inout Constraints) -> Void) async {
         let dir = a.dir
         _ = await attempt("Saving the measurement failed") {
-            try await Task.detached { try ManifestStore.saveAnswer(assetDir: dir, promptId: promptId, answer: answer) }.value
+            try await Task.detached { try ManifestStore.updateConstraints(assetDir: dir, mutate) }.value
             await refresh()
         }
     }

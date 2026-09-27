@@ -70,13 +70,17 @@ An **environment** is a place you scan (the backyard). It holds three things, al
 | | what | where |
 |---|---|---|
 | **Recordings** | raw data that was sensed: the iPhone video (copied in), its metadata, the frames extracted from it | `work/environments/<env>/recordings/<rec>/` |
-| **Runs** | processing jobs. `reconstruct` turns a recording into a 3D scan; `plan` turns a measured 3D scan into a site plan. A run has stages, logs, settings and working files, and publishes exactly one asset | `work/environments/<env>/runs/<run>/` |
-| **Assets** | what runs produce: a **3D scan** (dense cloud, textured mesh, preview plan, measurement prompts, USDZ preview) or a **site plan** (scale/level/north, true-scale plan images, Blender scene, metric cloud). Files are APFS clones of the run's deliverables, so an asset costs no extra disk | `work/environments/<env>/assets/<asset>/` |
+| **Runs** | processing jobs. An **environment scan** (`scan`) turns a recording into a 3D model; a **layout** (`layout`) turns a measured 3D model into a site plan. A run has stages, logs, settings and working files, and publishes exactly one asset | `work/environments/<env>/runs/<run>/` |
+| **Assets** | what runs produce: a **3D Model** (`model3d`: dense cloud, textured mesh, camera poses, preview plan, measurement prompts, USDZ preview) or a **Site Plan** (`site_plan`: orthomosaic with world file, DEM, contour lines, footprint, the DXF drawing, a PDF sheet at scale, the Blender scene, the metric cloud). Files are APFS clones of the run's deliverables, so an asset costs no extra disk | `work/environments/<env>/assets/<asset>/` |
 
-Assets are never overwritten: making a plan again publishes `plan2d-2` and `plan2d-1` stays as history. The newest asset of
-each kind is the environment's *current* state. Runs can consume earlier assets (a plan run consumes a 3D scan), which is
-how one asset becomes the input of the next. `tricorder/pipeline.py` orchestrates the stage scripts and is the only
-writer of run status; the app only writes names, notes and your measurements.
+Assets are never overwritten: laying out again publishes `site_plan-2` and `site_plan-1` stays as history. The newest
+asset of each kind is the environment's *current* state. Runs can consume earlier assets (a layout consumes a 3D model),
+which is how one asset becomes the input of the next. `tricorder/pipeline.py` orchestrates the stage scripts and is the
+only writer of run status; the app only writes names, notes and your measurements.
+
+Measurements live on the 3D model as `measure/constraints.json`: distance constraints (two points in the model's frame
+plus the metres you taped), the level check and the north bearing. Today they come from the prompts the landmark picker
+suggests; picking points in the 3D viewer or on a frame will write the same file. See `docs/COMPUTATIONS.md`.
 
 ## Mac app
 
@@ -87,7 +91,8 @@ make app                   # builds app/ and opens Tricorder.app
 A native SwiftUI app (macOS 26, Liquid Glass). The sidebar lists environments, each with *Recordings*, *Runs* and
 *Assets*. The environment page shows the current assets on top (the 3D scan in an orbitable SceneKit viewer, the site plan
 as an image), then every run linked to the asset it made, then the recordings inventory; the name is edited in place.
-An asset page has the 3D viewer, the *Measure* panel for tape measurements, and *Make Site Plan*; a run page has the
+An asset page has the 3D viewer, the *Measure* panel for tape measurements, and *Lay Out Site Plan*; a site plan page draws
+the contours, grid and measurements over the orthomosaic and opens the DXF and PDF; a run page has the
 stage chips and the live log. The app watches `work/environments` with FSEvents and starts work through
 `python -m tricorder.pipeline launch …` (detached, under `caffeinate`), so quitting the app never kills a run.
 Sources: `app/Tricorder/` (XcodeGen spec in `app/project.yml`; `make xcode` opens the project).
@@ -95,16 +100,16 @@ Sources: `app/Tricorder/` (XcodeGen spec in `app/project.yml`; `make xcode` open
 ## Command line
 
 ```bash
-make new VIDEO=data/backyard.MOV NAME="Backyard" MAXF=600     # environment + recording + reconstruct run, executes now
+make new VIDEO=data/backyard.MOV NAME="Backyard" MAXF=600     # environment + recording + scan run, executes now
 make run ENV=backyard RUN=r1                                    # (re)execute: finished stages are kept, asset re-published
 python -m tricorder.pipeline run backyard r1 --redo preview     # redo one stage (e.g. a lighter 3D preview)
-make plan ENV=backyard ASSET=scan3d-1                           # after answering the scan's measurement prompts
+make layout ENV=backyard ASSET=model3d-1                        # after entering the model's measurements
 make list
-python -m tricorder.pipeline new-run backyard reconstruct --recording rec1 --features ALIKED --matcher LIGHTGLUE --start
+python -m tricorder.pipeline new-run backyard scan --recording rec1 --features ALIKED --matcher LIGHTGLUE --start
 python -m tricorder.pipeline new-recording backyard data/evening.MOV --name "Evening walk"
 make migrate                                                    # old work/scans layout -> work/environments
 ```
-Options: `FPS`, `MAXF` (frames), `RES_LEVEL` (dense 1/2/3), `FEATURES`, `MATCHER`, `MATCHING`, `MEASURES`, `PXM` (plan px/m).
+Options: `FPS`, `MAXF` (frames), `RES_LEVEL` (dense 1/2/3), `FEATURES`, `MATCHER`, `MATCHING`, `MEASURES`, `PXM` (orthomosaic px/m).
 `run_all.sh <video> [name]` still works as a wrapper around `new`.
 
 ## Capturing the video (this is 80% of the result)
@@ -135,7 +140,7 @@ Move the video to `data/backyard.mp4` (AirDrop keeps full quality; iCloud "optim
 3. **OpenMVS** (`scripts/03_dense.sh`): dense cloud, mesh, fragment cleanup + decimation to 4M faces, texture. Resumable.
 4. **Landmarks** (`scripts/04..06`, `pick_landmarks.py`): levelled unscaled preview plan, plus the measurement prompts.
 5. **Preview** (`scripts/07_preview_model.py`, Blender): the textured mesh decimated to 300k faces, textures capped at 4096², as `preview.usdz` for the app's 3D viewer (about 30 MB; the 8192² OpenMVS atlas alone would take 256 MB of GPU memory per view).
-6. **Plan** (`solve_scale.py` + Blender, a separate `plan` run on the scan asset): scale / level / north from your answers, `plan_grid.png`, `plan.blend`, metric cloud.
+6. **Layout** (a separate `layout` run on the 3D model): `solve_scale.py` turns the measurements into scale / level / north and a metric cloud; Blender renders the **orthomosaic** at true scale; `08_site_plan.py` builds the DEM, **contour lines** (0.25 m), the footprint, the **DXF** drawing (layers ORTHO, GRID, CONTOURS, FOOTPRINT, MEASURE, NORTH, SCALEBAR, TITLE) and a **PDF sheet** at 1:100 on A2 (auto-reduced if the site is larger).
 
 COLMAP knobs (env vars or the run form):
 

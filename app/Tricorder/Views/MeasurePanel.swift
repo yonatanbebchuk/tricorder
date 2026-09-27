@@ -1,16 +1,16 @@
 import SwiftUI
 
-/// Tape-measure prompts: distances between two picked points, the ground check, the north bearing.
-/// Answers go straight to the scan asset's measure/answers.json, the same file solve_scale.py reads.
+/// Tape-measure prompts (spans between picked points, the ground check, the north bearing) and the list of every
+/// measurement entered so far. Everything is written to the 3D model's measure/constraints.json, the file the
+/// layout run's scale solver reads; points travel with each constraint so the solver never needs the prompts.
 struct MeasurePanel: View {
     @Environment(Workspace.self) private var ws
     let record: AssetRecord
 
     var body: some View {
         if let p = record.prompts {
-            let answers = record.answers
-            let shown = Self.shown(p, answers)
-            let answered = record.answeredCount
+            let c = record.constraints
+            let shown = Self.shown(p, c)
             Card("Measure") {
                 Text("Take a tape or laser measure to the site. For each pair find the red and blue points (left: where in the frame; right: zoom), measure the straight-line distance between them and enter it in metres. Long spans matter more than many. Skip anything you can't identify or that has moved; another prompt takes its place.")
                     .foregroundStyle(.secondary)
@@ -19,28 +19,88 @@ struct MeasurePanel: View {
                 }
                 if let g = p.prompts.first(where: { $0.type == "ground" }) { GroundPromptCard(prompt: g, record: record) }
                 if let n = p.prompts.first(where: { $0.type == "north" }) { NorthPromptCard(prompt: n, record: record) }
-                Text("\(answered) of \(p.count) measurements entered" + (answered == 0 ? " · at least one is needed" : ""))
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 6)
+                MeasurementList(record: record)
             }
         }
     }
 
-    /// The first `count` distance prompts, plus one replacement for each skipped one (same rule as the web UI).
-    static func shown(_ p: PromptSet, _ answers: [String: Answer]) -> [Prompt] {
+    /// The first `count` distance prompts, plus one replacement for each skipped one.
+    static func shown(_ p: PromptSet, _ c: Constraints) -> [Prompt] {
         let dist = p.distances
         var shown: [Prompt] = []
         var extra = 0
         for x in dist {
             if shown.count >= p.count { break }
             shown.append(x)
-            if answers[x.id]?.skipped == true { extra += 1 }
+            if c.isSkipped(x.id) { extra += 1 }
         }
         for x in dist {
             if shown.count >= p.count + extra { break }
             if !shown.contains(where: { $0.id == x.id }) { shown.append(x) }
         }
         return shown
+    }
+}
+
+/// Every constraint on the model, whatever its source, with its residual against the mean scale.
+struct MeasurementList: View {
+    @Environment(Workspace.self) private var ws
+    let record: AssetRecord
+
+    private var c: Constraints { record.constraints }
+    private var meanScale: Double? {
+        let f = c.distances.compactMap { $0.modelDistance > 0 ? $0.meters / $0.modelDistance : nil }
+        return f.isEmpty ? nil : f.reduce(0, +) / Double(f.count)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Measurements").font(.headline)
+                Text(c.distances.isEmpty ? "none yet · at least one is needed for a layout" : "\(c.distances.count) entered" + (c.distances.count > 1 ? " · residuals against their mean scale" : ""))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(c.distances) { d in
+                HStack(spacing: 10) {
+                    Text(d.id).font(Theme.mono).frame(width: 60, alignment: .leading)
+                    SourceBadge(source: d.source)
+                    Text(String(format: "%.2f m", d.meters)).fontWeight(.medium)
+                    Text(String(format: "%.2f model units", d.modelDistance)).font(.caption).foregroundStyle(.secondary)
+                    if let s = meanScale, c.distances.count > 1, d.modelDistance > 0 {
+                        let res = (d.meters / d.modelDistance / s - 1) * d.meters * 100
+                        Text(String(format: "%@%.1f cm", res >= 0 ? "+" : "", res)).font(Theme.mono).foregroundStyle(abs(res) > 5 ? Theme.bad : .secondary)
+                    }
+                    Spacer()
+                    Button("Remove", systemImage: "xmark.circle") { remove(d) }.labelStyle(.iconOnly).buttonStyle(.borderless).foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 2)
+            }
+            HStack(spacing: 14) {
+                HStack(spacing: 5) {
+                    Image(systemName: c.level?.confirmed == true ? "checkmark.circle.fill" : "circle").foregroundStyle(c.level?.confirmed == true ? Theme.ok : .secondary)
+                    Text(c.level == nil ? "level: automatic" : c.level!.confirmed ? "level: 3 confirmed ground points" : "level: automatic (points rejected)")
+                }
+                HStack(spacing: 5) {
+                    Image(systemName: c.north != nil ? "checkmark.circle.fill" : "circle").foregroundStyle(c.north != nil ? Theme.ok : .secondary)
+                    Text(c.north.map { "north: bearing \(Format.number($0.bearing, digits: 1))°" } ?? "north: not set (plan keeps the model's orientation)")
+                }
+            }
+            .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
+        }
+        .padding(.top, 8)
+    }
+
+    private func remove(_ d: DistanceConstraint) {
+        Task { await ws.updateConstraints(record) { $0.distances.removeAll { $0.id == d.id } } }
+    }
+}
+
+struct SourceBadge: View {
+    let source: String
+    var body: some View {
+        Text(source).font(.caption2).fontWeight(.medium)
+            .padding(.horizontal, 6).padding(.vertical, 1.5)
+            .background(.quaternary, in: Capsule()).foregroundStyle(.secondary)
     }
 }
 
@@ -104,9 +164,9 @@ struct DistancePromptCard: View {
     @State private var text = ""
     @FocusState private var focused: Bool
 
-    private var answer: Answer? { record.answers[prompt.id] }
-    private var skipped: Bool { answer?.skipped == true }
-    private var answered: Bool { (answer?.value ?? 0) > 0 }
+    private var constraint: DistanceConstraint? { record.constraints.distance(forPrompt: prompt.id) }
+    private var skipped: Bool { record.constraints.isSkipped(prompt.id) }
+    private var answered: Bool { constraint != nil }
 
     var body: some View {
         PromptFrame(answered: answered, skipped: skipped) {
@@ -130,15 +190,17 @@ struct DistancePromptCard: View {
                         .onSubmit(commit)
                     Text("m").foregroundStyle(.secondary)
                     if skipped {
-                        Button("Un-skip") { save(nil) }
+                        Button("Un-skip") { update { $0.skippedPrompts.removeAll { $0 == prompt.id } } }
                     } else {
-                        Button("Can’t measure this") { save(Answer(skipped: true)) }
+                        Button("Can’t measure this") {
+                            update { c in c.skippedPrompts.append(prompt.id); c.distances.removeAll { $0.promptId == prompt.id } }
+                        }
                     }
                 }
             }
         }
-        .onAppear { text = answer?.value.map { Format.number($0) } ?? "" }
-        .onChange(of: answer?.value) { _, v in text = v.map { Format.number($0) } ?? "" }
+        .onAppear { text = constraint.map { Format.number($0.meters) } ?? "" }
+        .onChange(of: constraint?.meters) { _, v in text = v.map { Format.number($0) } ?? "" }
         .onChange(of: focused) { _, f in if !f { commit() } }
     }
 
@@ -150,13 +212,21 @@ struct DistancePromptCard: View {
 
     private func commit() {
         let v = Double(text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")) ?? 0
-        let current = answer?.value ?? 0
-        if v > 0, v != current { save(Answer(value: v)) }
-        else if v <= 0, current > 0 { save(nil) }
+        let current = constraint?.meters ?? 0
+        guard v != current else { return }
+        guard let a = prompt.a?.xyz, let b = prompt.b?.xyz else { return }
+        let id = prompt.id
+        update { c in
+            c.distances.removeAll { $0.promptId == id }
+            if v > 0 {
+                c.distances.append(DistanceConstraint(id: "m-\(id)", source: "prompt", promptId: id, a: a, b: b, meters: v, note: nil, at: Format.now()))
+                c.skippedPrompts.removeAll { $0 == id }
+            }
+        }
     }
 
-    private func save(_ a: Answer?) {
-        Task { await ws.saveAnswer(record, promptId: prompt.id, answer: a) }
+    private func update(_ mutate: @escaping @Sendable (inout Constraints) -> Void) {
+        Task { await ws.updateConstraints(record, mutate) }
     }
 }
 
@@ -165,7 +235,7 @@ struct GroundPromptCard: View {
     let prompt: Prompt
     let record: AssetRecord
 
-    private var confirmed: Bool? { record.answers["g1"]?.confirmed }
+    private var confirmed: Bool? { record.constraints.level?.confirmed }
 
     var body: some View {
         PromptFrame(answered: confirmed == true, skipped: false) {
@@ -187,7 +257,8 @@ struct GroundPromptCard: View {
     }
 
     private func save(_ v: Bool) {
-        Task { await ws.saveAnswer(record, promptId: "g1", answer: Answer(confirmed: v)) }
+        let pts = (prompt.points ?? []).compactMap(\.xyz)
+        Task { await ws.updateConstraints(record) { $0.level = LevelConstraint(source: "prompt", confirmed: v, points: pts) } }
     }
 }
 
@@ -199,7 +270,7 @@ struct NorthPromptCard: View {
     @State private var text = ""
     @FocusState private var focused: Bool
 
-    private var bearing: Double? { record.answers["n1"]?.bearing }
+    private var bearing: Double? { record.constraints.north?.bearing }
 
     var body: some View {
         PromptFrame(answered: bearing != nil, skipped: false) {
@@ -226,6 +297,7 @@ struct NorthPromptCard: View {
     private func commit() {
         let v = Double(text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "."))
         if v == bearing { return }
-        Task { await ws.saveAnswer(record, promptId: "n1", answer: v.map { Answer(bearing: $0) }) }
+        let frame = prompt.frame, forward = prompt.forward
+        Task { await ws.updateConstraints(record) { $0.north = v.map { NorthConstraint(source: "prompt", frame: frame, forward: forward, bearing: $0) } } }
     }
 }

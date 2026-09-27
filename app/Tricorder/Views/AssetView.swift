@@ -25,10 +25,14 @@ struct AssetView: View {
             .navigationSubtitle("\(asset.kind.label) · from run \(asset.runId)")
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
-                    if asset.kind == .scan3d {
-                        Button("Make Site Plan", systemImage: "map") { makePlan() }
+                    if asset.kind == .model3d {
+                        Button("Lay Out Site Plan", systemImage: "map") { makePlan() }
                             .disabled(record.answeredCount == 0 || planRunning || startingPlan)
-                            .help(record.answeredCount == 0 ? "Enter at least one measurement first" : "Solve scale, level and north; render the plan")
+                            .help(record.answeredCount == 0 ? "Enter at least one measurement first" : "Solve scale, level and north; orthomosaic, contours, DXF and PDF")
+                    }
+                    if asset.kind == .sitePlan {
+                        if record.has("site_plan.dxf") { Button("Open DXF", systemImage: "pencil.and.ruler") { ws.openFile(record.url("site_plan.dxf")) }.help("Open the CAD drawing (QCAD, AutoCAD, …)") }
+                        if record.has("site_plan.pdf") { Button("Open PDF", systemImage: "doc.richtext") { ws.openFile(record.url("site_plan.pdf")) }.help("Open the sheet") }
                     }
                     Button("Show in Finder", systemImage: "folder") { ws.reveal(record.dir) }
                     Menu {
@@ -53,7 +57,7 @@ struct AssetView: View {
         Task {
             var s = RunSettings()
             if let p = producer { s = p.run.settings }
-            _ = await ws.createRun(env: env.id, kind: .plan, inputId: asset.id, settings: s, label: "")
+            _ = await ws.createRun(env: env.id, kind: .layout, inputId: asset.id, settings: s, label: "")
             startingPlan = false
         }
     }
@@ -61,19 +65,28 @@ struct AssetView: View {
     var pageContent: some View {
         VStack(alignment: .leading, spacing: 22) {
             header
-            viewer
+            if asset.kind == .sitePlan, let o = record.overlay { SitePlanView(record: record, overlay: o) } else { viewer }
             tiles
-            if asset.kind == .scan3d {
+            if asset.kind == .model3d {
                 if record.prompts != nil { MeasurePanel(record: record) }
                 planAction
                 if !derivedPlans.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
-                        SectionTitle(title: "Site plans from this scan") { EmptyView() }
+                        SectionTitle(title: "Site plans from this model") { EmptyView() }
                         Card("") { AssetRows(env: env, assets: derivedPlans) }
                     }
                 }
             }
-            if asset.kind == .plan2d, let t = record.transform { ScaleResultView(transform: t) }
+            if asset.kind == .sitePlan {
+                if let t = record.transform { ScaleResultView(transform: t) }
+                if record.preview != nil {
+                    DisclosureGroup("3D model at true scale, levelled and north-up") {
+                        ModelViewer(url: record.preview!).frame(height: 460).frame(maxWidth: .infinity)
+                            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+                    }
+                    .font(.callout)
+                }
+            }
             FilesCard(record: record)
         }
         .padding(28)
@@ -128,14 +141,7 @@ struct AssetView: View {
                 Text("No 3D preview exported for this asset yet. Run \(asset.runId) again to export one (finished stages are kept).")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if asset.kind == .plan2d, let img = record.planImage, record.preview != nil {
-                FileImage(url: img, maxPixel: 2600)
-                    .frame(maxHeight: 640)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
-                    .onTapGesture { ws.openFile(img) }
-                Text("Site plan at true scale (1 m grid). Click to open in Preview; trace it in QCAD, or open plan.blend.").font(.caption).foregroundStyle(.secondary)
-            } else if asset.kind == .scan3d, record.preview != nil, let img = record.planImage {
+            if asset.kind == .model3d, record.preview != nil, let img = record.planImage {
                 DisclosureGroup("Preview plan (levelled, unscaled)") {
                     FileImage(url: img, maxPixel: 2600).frame(maxHeight: 520).clipShape(RoundedRectangle(cornerRadius: 8)).onTapGesture { ws.openFile(img) }
                 }
@@ -154,14 +160,14 @@ struct AssetView: View {
         Card("") {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Site plan").font(.headline)
+                    Text("Layout").font(.headline)
                     Text(record.answeredCount == 0
-                         ? "Enter at least one tape measurement above, then make the site plan: scale, level and north are solved from your answers and a true-scale plan is rendered."
-                         : "\(record.answeredCount) of \(record.prompts?.count ?? 0) measurements entered. Making a plan publishes a new site-plan asset; earlier plans stay in the history.")
+                         ? "Enter at least one tape measurement above, then lay out the site plan: scale, level and north are solved from the measurements, then the orthomosaic, contour lines, DXF drawing and PDF sheet are produced."
+                         : "\(record.answeredCount) measurement\(record.answeredCount == 1 ? "" : "s") entered. A layout publishes a new site-plan asset; earlier plans stay in the history.")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(planRunning || startingPlan ? "Working…" : derivedPlans.isEmpty ? "Make Site Plan" : "Make Site Plan Again", systemImage: "map") { makePlan() }
+                Button(planRunning || startingPlan ? "Working…" : derivedPlans.isEmpty ? "Lay Out Site Plan" : "Lay Out Again", systemImage: "map") { makePlan() }
                     .buttonStyle(.glassProminent)
                     .disabled(record.answeredCount == 0 || planRunning || startingPlan || !record.hasTexturedMesh)
             }
@@ -183,7 +189,7 @@ struct ScaleResultView: View {
                 Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 4) {
                     ForEach(transform.residuals) { r in
                         GridRow {
-                            Text("\(r.id) \(r.kind)")
+                            HStack(spacing: 6) { Text("\(r.id) \(r.kind)"); if let src = r.source { SourceBadge(source: src) } }
                             Text(String(format: "%.2f m", r.meters)).font(Theme.mono)
                             Text(String(format: "%@%.1f cm vs mean", r.residualCm >= 0 ? "+" : "", r.residualCm))
                                 .font(Theme.mono)

@@ -127,7 +127,7 @@ enum DebugHooks {
         await shot("home", after: 2)
         ws.select(.environment(e.id))
         await shot("environment", after: 4)
-        if let a = e.currentAssets.first(where: { $0.asset.kind == .scan3d }) ?? e.assets.last {
+        if let a = e.currentAssets.first(where: { $0.asset.kind == .model3d }) ?? e.assets.last {
             ws.open(.asset(e.id, a.asset.id))
             await shot("asset", after: 4)
         }

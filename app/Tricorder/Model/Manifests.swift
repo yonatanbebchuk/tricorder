@@ -147,21 +147,21 @@ struct Recording: Decodable, Sendable, Hashable, Identifiable {
 // MARK: - run
 
 enum RunKind: String, Decodable, Sendable, Hashable, CaseIterable {
-    case reconstruct, plan
+    case scan, layout
 
     var label: String {
-        switch self { case .reconstruct: "3D reconstruction"; case .plan: "Site plan" }
+        switch self { case .scan: "Environment scan"; case .layout: "Layout" }
     }
     var verb: String {
-        switch self { case .reconstruct: "Reconstruct"; case .plan: "Make site plan" }
+        switch self { case .scan: "Scan"; case .layout: "Lay out" }
     }
     /// What the run consumes: a recording, or an asset of this kind.
-    var inputAssetKind: AssetKind? { self == .plan ? .scan3d : nil }
+    var inputAssetKind: AssetKind? { self == .layout ? .model3d : nil }
     var outputKind: AssetKind {
-        switch self { case .reconstruct: .scan3d; case .plan: .plan2d }
+        switch self { case .scan: .model3d; case .layout: .sitePlan }
     }
     var stages: [String] {
-        switch self { case .reconstruct: ["sfm", "dense", "landmarks", "preview"]; case .plan: ["plan", "preview"] }
+        switch self { case .scan: ["sfm", "dense", "landmarks", "preview"]; case .layout: ["solve", "ortho", "draw", "preview"] }
     }
 }
 
@@ -174,13 +174,16 @@ struct RunSettings: Decodable, Sendable, Hashable {
     var measures: Int = 4
     var maxFaces: Int = 4_000_000
     var pxPerM: Int = 50
+    var contourM: Double = 0.25
+    var sheetScale: Int = 100
     var previewFaces: Int = 300_000
 
     init() {}
 
     enum CodingKeys: String, CodingKey {
         case features, matcher, matching, relaxed, measures
-        case resLevel = "res_level", maxFaces = "max_faces", pxPerM = "px_per_m", previewFaces = "preview_faces"
+        case resLevel = "res_level", maxFaces = "max_faces", pxPerM = "px_per_m", contourM = "contour_m", sheetScale = "sheet_scale"
+        case previewFaces = "preview_faces"
     }
 
     init(from decoder: any Decoder) throws {
@@ -193,6 +196,8 @@ struct RunSettings: Decodable, Sendable, Hashable {
         measures = try c.decodeIfPresent(Int.self, forKey: .measures) ?? 4
         maxFaces = try c.decodeIfPresent(Int.self, forKey: .maxFaces) ?? 4_000_000
         pxPerM = try c.decodeIfPresent(Int.self, forKey: .pxPerM) ?? 50
+        contourM = try c.decodeIfPresent(Double.self, forKey: .contourM) ?? 0.25
+        sheetScale = try c.decodeIfPresent(Int.self, forKey: .sheetScale) ?? 100
         previewFaces = try c.decodeIfPresent(Int.self, forKey: .previewFaces) ?? 300_000
     }
 }
@@ -246,13 +251,13 @@ struct Run: Decodable, Sendable, Hashable, Identifiable {
 // MARK: - asset
 
 enum AssetKind: String, Decodable, Sendable, Hashable, CaseIterable {
-    case scan3d, plan2d
+    case model3d, sitePlan = "site_plan"
 
     var label: String {
-        switch self { case .scan3d: "3D scan"; case .plan2d: "Site plan" }
+        switch self { case .model3d: "3D Model"; case .sitePlan: "Site Plan" }
     }
     var symbol: String {
-        switch self { case .scan3d: "cube.transparent"; case .plan2d: "map" }
+        switch self { case .model3d: "cube.transparent"; case .sitePlan: "map" }
     }
 }
 
@@ -298,6 +303,7 @@ struct Asset: Decodable, Sendable, Hashable, Identifiable {
 struct PromptPoint: Decodable, Sendable, Hashable {
     var pid: Int?
     var structural: Bool?
+    var xyz: [Double]?
     var frame: String?
     var crop: String?
     var context: String?
@@ -315,9 +321,10 @@ struct Prompt: Decodable, Sendable, Hashable, Identifiable {
     var text: String?
     var frame: String?
     var context: String?
+    var forward: [Double]?
 
     enum CodingKeys: String, CodingKey {
-        case id, type, kind, rank, a, b, points, text, frame, context
+        case id, type, kind, rank, a, b, points, text, frame, context, forward
         case modelDist = "model_dist"
     }
 
@@ -333,23 +340,93 @@ struct PromptSet: Decodable, Sendable, Hashable {
     var distances: [Prompt] { prompts.filter { $0.type == "distance" } }
 }
 
-struct Answer: Codable, Sendable, Hashable {
-    var value: Double? = nil
-    var skipped: Bool? = nil
-    var confirmed: Bool? = nil
-    var bearing: Double? = nil
-    var at: String? = nil
+// MARK: measure/constraints.json — every way of measuring ends up here, points in the model's frame
 
-    var isEmpty: Bool { value == nil && skipped == nil && confirmed == nil && bearing == nil }
+struct DistanceConstraint: Codable, Sendable, Hashable, Identifiable {
+    var id: String
+    var source: String              // prompt | viewer | snapshot
+    var promptId: String?
+    var a: [Double]
+    var b: [Double]
+    var meters: Double
+    var note: String?
+    var at: String?
+
+    enum CodingKeys: String, CodingKey { case id, source, a, b, meters, note, at, promptId = "prompt_id" }
+
+    var modelDistance: Double {
+        guard a.count >= 3, b.count >= 3 else { return 0 }
+        return ((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2])).squareRoot()
+    }
+}
+
+struct LevelConstraint: Codable, Sendable, Hashable {
+    var source: String
+    var confirmed: Bool
+    var points: [[Double]]
+}
+
+struct NorthConstraint: Codable, Sendable, Hashable {
+    var source: String
+    var frame: String?
+    var forward: [Double]?
+    var bearing: Double
+}
+
+struct Constraints: Codable, Sendable, Hashable {
+    var distances: [DistanceConstraint] = []
+    var skippedPrompts: [String] = []
+    var level: LevelConstraint? = nil
+    var north: NorthConstraint? = nil
+
+    init() {}
+
+    enum CodingKeys: String, CodingKey { case distances, level, north, skippedPrompts = "skipped_prompts" }
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        distances = try c.decodeIfPresent([DistanceConstraint].self, forKey: .distances) ?? []
+        skippedPrompts = try c.decodeIfPresent([String].self, forKey: .skippedPrompts) ?? []
+        level = try c.decodeIfPresent(LevelConstraint.self, forKey: .level)
+        north = try c.decodeIfPresent(NorthConstraint.self, forKey: .north)
+    }
+
+    func distance(forPrompt id: String) -> DistanceConstraint? { distances.first { $0.promptId == id } }
+    func isSkipped(_ id: String) -> Bool { skippedPrompts.contains(id) }
+}
+
+/// overlay.json on a site plan: what the app draws over the orthomosaic, all in metres.
+struct PlanOverlay: Decodable, Sendable, Hashable {
+    struct Contour: Decodable, Sendable, Hashable { var level: Double; var index: Bool; var points: [[Double]] }
+    struct Measurement: Decodable, Sendable, Hashable { var id: String; var source: String; var meters: Double; var a: [Double]; var b: [Double] }
+    var pxPerM: Double
+    var xMin: Double
+    var yMax: Double
+    var widthPx: Int
+    var heightPx: Int
+    var widthM: Double
+    var heightM: Double
+    var contourInterval: Double?
+    var sheetScale: Int?
+    var contours: [Contour]
+    var footprint: [[[Double]]]
+    var measurements: [Measurement]
+
+    enum CodingKeys: String, CodingKey {
+        case contours, footprint, measurements
+        case pxPerM = "px_per_m", xMin = "x_min", yMax = "y_max", widthPx = "width_px", heightPx = "height_px"
+        case widthM = "width_m", heightM = "height_m", contourInterval = "contour_interval", sheetScale = "sheet_scale"
+    }
 }
 
 struct Residual: Decodable, Sendable, Hashable, Identifiable {
     var id: String
     var kind: String
+    var source: String?
     var meters: Double
     var residualCm: Double
 
-    enum CodingKeys: String, CodingKey { case id, kind, meters, residualCm = "residual_cm" }
+    enum CodingKeys: String, CodingKey { case id, kind, source, meters, residualCm = "residual_cm" }
 }
 
 struct Transform: Decodable, Sendable, Hashable {

@@ -17,7 +17,7 @@ struct RunView: View {
 
     private var stages: [(key: String, stage: Stage)] {
         var s: [(String, Stage)] = []
-        if run.kind == .reconstruct, let r = inputRecording { s.append(("frames", r.rec.frames)) }
+        if run.kind == .scan, let r = inputRecording { s.append(("frames", r.rec.frames)) }
         s += run.kind.stages.map { ($0, run.stage($0)) }
         return s
     }
@@ -75,7 +75,7 @@ struct RunView: View {
     private var flow: some View {
         Card("") {
             HStack(spacing: 14) {
-                flowNode(symbol: run.kind == .reconstruct ? "video" : "cube.transparent", title: run.kind == .reconstruct ? "Recording" : "3D scan",
+                flowNode(symbol: run.kind == .scan ? "video" : "cube.transparent", title: run.kind == .scan ? "Recording" : "3D model",
                          name: env.inputName(of: run)) {
                     if let r = inputRecording { ws.open(.recording(env.id, r.rec.id)) }
                     else if let a = inputAsset { ws.open(.asset(env.id, a.asset.id)) }

@@ -25,21 +25,22 @@ struct AssetRecord: Identifiable, Hashable, Sendable {
     var dir: URL
     var thumbnail: URL?
     var preview: URL?              // preview.usdz for the 3D viewer
-    var prompts: PromptSet?        // scan3d: what to tape-measure
-    var answers: [String: Answer]
-    var transform: Transform?      // plan2d: scale / level / north
+    var prompts: PromptSet?        // 3D model: what to tape-measure
+    var constraints: Constraints   // 3D model: the measurements entered so far
+    var transform: Transform?      // site plan: scale / level / north
+    var overlay: PlanOverlay?      // site plan: contours, footprint, measurements over the orthomosaic
 
     var id: String { "\(asset.envId)/\(asset.id)" }
     func url(_ relative: String) -> URL { dir.appending(path: relative) }
     func has(_ path: String) -> Bool { asset.files.contains { $0.path == path } }
     /// The best top-down picture of this asset.
     var planImage: URL? {
-        if has("plan_grid.png") { return url("plan_grid.png") }
+        if has("orthomosaic.png") { return url("orthomosaic.png") }
         if has("preview_plan_grid.png") { return url("preview_plan_grid.png") }
         return nil
     }
     var hasTexturedMesh: Bool { has("dense/scene_dense_mesh_texture.obj") }
-    var answeredCount: Int { prompts?.distances.filter { (answers[$0.id]?.value ?? 0) > 0 }.count ?? 0 }
+    var answeredCount: Int { constraints.distances.count }
 }
 
 struct EnvironmentRecord: Identifiable, Hashable, Sendable {
@@ -71,7 +72,7 @@ struct EnvironmentRecord: Identifiable, Hashable, Sendable {
     }
     /// Picture for the sidebar and home cards: the current plan, else the current scan, else a recording frame.
     var thumbnail: URL? {
-        currentAssets.first { $0.asset.kind == .plan2d }?.thumbnail
+        currentAssets.first { $0.asset.kind == .sitePlan }?.thumbnail
             ?? currentAssets.first?.thumbnail
             ?? recordings.first?.thumbnail
     }
@@ -127,7 +128,7 @@ struct EnvRef: Identifiable, Hashable, Sendable {
 
 struct NewRunRequest: Identifiable, Hashable, Sendable {
     let envId: String
-    var kind: RunKind = .reconstruct
+    var kind: RunKind = .scan
     var inputId: String? = nil
     var id: String { "\(envId)/\(kind.rawValue)/\(inputId ?? "")" }
 }

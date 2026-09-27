@@ -90,14 +90,14 @@ struct EnvironmentView: View {
             }
             if record.currentAssets.isEmpty {
                 Card("") {
-                    Text(record.recordings.isEmpty ? "No assets yet. Add a recording of the site, then reconstruct it."
-                                                    : "No assets yet. Reconstruct a recording to get the first 3D scan.")
+                    Text(record.recordings.isEmpty ? "No assets yet. Add a recording of the site, then scan it."
+                                                    : "No assets yet. Scan a recording to get the first 3D model.")
                         .foregroundStyle(.secondary)
                     HStack {
                         if record.recordings.isEmpty {
                             Button("Add Recording…", systemImage: "video.badge.plus") { ws.requestNewRecording(env: record.id) }.buttonStyle(.glassProminent)
                         } else {
-                            Button("Reconstruct…", systemImage: "play.fill") { ws.requestNewRun(env: record.id) }.buttonStyle(.glassProminent)
+                            Button("Scan…", systemImage: "play.fill") { ws.requestNewRun(env: record.id) }.buttonStyle(.glassProminent)
                         }
                     }
                 }
@@ -169,7 +169,7 @@ struct AssetShowcase: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Group {
-                if record.asset.kind == .scan3d, let preview = record.preview {
+                if record.asset.kind == .model3d, let preview = record.preview {
                     ModelViewer(url: preview)
                 } else if let img = record.planImage {
                     FileImage(url: img, maxPixel: 1600).padding(10)

@@ -26,8 +26,8 @@ struct RecordingView: View {
             .navigationSubtitle(Format.videoLine(rec.source))
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
-                    Button("Reconstruct", systemImage: "play.fill") { ws.requestNewRun(env: env.id, kind: .reconstruct, inputId: rec.id) }
-                        .help("Start a 3D reconstruction on this recording")
+                    Button("Scan", systemImage: "play.fill") { ws.requestNewRun(env: env.id, kind: .scan, inputId: rec.id) }
+                        .help("Start an environment scan on this recording")
                     Button("Show in Finder", systemImage: "folder") { ws.reveal(record.dir) }
                     Menu {
                         Button("Open Video") { ws.openFile(videoURL) }
@@ -68,7 +68,7 @@ struct RecordingView: View {
             }
             VStack(alignment: .leading, spacing: 12) {
                 SectionTitle(title: "Runs on this recording") {
-                    Button("Reconstruct…", systemImage: "play.fill") { ws.requestNewRun(env: env.id, kind: .reconstruct, inputId: rec.id) }.buttonStyle(.borderless)
+                    Button("Scan…", systemImage: "play.fill") { ws.requestNewRun(env: env.id, kind: .scan, inputId: rec.id) }.buttonStyle(.borderless)
                 }
                 Card("") { RunsTable(env: env, runs: runs) }
             }

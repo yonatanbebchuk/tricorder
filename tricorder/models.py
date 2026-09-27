@@ -8,7 +8,7 @@ work/environments/<env>/runs/<run>/logs/<stage>.log
 work/environments/<env>/runs/<run>/                      working files (database.db, sparse/, dense/, measure/, ...)
 work/environments/<env>/assets/<asset>/asset.json        a deliverable made by a run (3D scan, site plan); its files live next to it
 
-A run consumes either a recording (reconstruct) or an earlier asset (plan) and publishes exactly one asset.
+A run consumes either a recording (scan) or an earlier asset (layout) and publishes exactly one asset.
 Assets are immutable: running again publishes a new asset and the earlier ones stay as history.
 Everything here is private, local data; work/ is git-ignored.
 """
@@ -29,13 +29,19 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 VIDEO_EXT = {".mov", ".mp4", ".m4v", ".mkv", ".avi"}
 
 RUN_KINDS: dict[str, dict[str, Any]] = {
-    "reconstruct": {"label": "3D reconstruction", "input": "recording", "output": "scan3d",
-                    "stages": ["sfm", "dense", "landmarks", "preview"]},
-    "plan": {"label": "Site plan", "input": "scan3d", "output": "plan2d", "stages": ["plan", "preview"]},
+    "scan": {"label": "Environment scan", "input": "recording", "output": "model3d",
+             "stages": ["sfm", "dense", "landmarks", "preview"]},
+    "layout": {"label": "Layout", "input": "model3d", "output": "site_plan", "stages": ["solve", "ortho", "draw", "preview"]},
 }
-ASSET_KINDS = {"scan3d": "3D scan", "plan2d": "Site plan"}
-STAGE_LABELS = {"frames": "Frames", "sfm": "COLMAP", "dense": "OpenMVS", "landmarks": "Landmarks",
-                "preview": "Preview", "plan": "Plan"}
+ASSET_KINDS = {"model3d": "3D Model", "site_plan": "Site Plan"}
+STAGE_LABELS = {"frames": "Frames", "sfm": "COLMAP", "dense": "OpenMVS", "landmarks": "Landmarks", "preview": "Preview",
+                "solve": "Scale & level", "ortho": "Orthomosaic", "draw": "Drawing"}
+
+# measure/constraints.json on a 3D-model asset (written by the app, read by scripts/solve_scale.py):
+#   {"distances": [{"id", "source": "prompt|viewer|snapshot", "prompt_id"?, "a": [x,y,z], "b": [x,y,z], "meters", "note", "at"}],
+#    "skipped_prompts": [prompt ids], "level": {"source", "confirmed", "points": [[x,y,z] x3]} | null,
+#    "north": {"source", "frame", "forward": [x,y,z], "bearing"} | null}
+# Points are in the model's own coordinate frame, whatever produced them.
 
 
 def now() -> str:
@@ -55,7 +61,7 @@ def unique_id(base: str, parent: Path) -> str:
 
 
 def next_id(parent: Path, prefix: str) -> str:
-    """rec1, rec2 … / r1, r2 … / scan3d-1 …: the first unused number under parent."""
+    """rec1, rec2 … / r1, r2 … / model3d-1 …: the first unused number under parent."""
     n = 1
     while (parent / f"{prefix}{n}").exists():
         n += 1
@@ -232,7 +238,9 @@ class RunSettings:
     relaxed: int = 1
     measures: int = 4
     max_faces: int = 4_000_000
-    px_per_m: int = 50               # plan render resolution
+    px_per_m: int = 50               # orthomosaic resolution
+    contour_m: float = 0.25          # contour interval
+    sheet_scale: int = 100           # wanted PDF sheet scale 1:N
     preview_faces: int = 300_000     # decimation target for the in-app 3D preview
 
     def env(self) -> dict[str, str]:
@@ -245,8 +253,8 @@ class RunSettings:
 class Run:
     id: str
     env_id: str
-    kind: str                                    # reconstruct | plan
-    inputs: dict[str, str]                       # {"recording": "rec1"} or {"asset": "scan3d-1"}
+    kind: str                                    # scan | layout
+    inputs: dict[str, str]                       # {"recording": "rec1"} or {"asset": "model3d-1"}
     created_at: str
     settings: RunSettings = field(default_factory=RunSettings)
     status: str = "queued"                       # queued | running | done | failed | cancelled | interrupted
@@ -307,7 +315,7 @@ class Run:
 class Asset:
     id: str
     env_id: str
-    kind: str                                    # scan3d | plan2d
+    kind: str                                    # model3d | site_plan
     name: str
     run_id: str
     created_at: str

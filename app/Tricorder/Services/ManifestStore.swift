@@ -4,7 +4,8 @@ import Foundation
 /// synchronous and off the main actor; Workspace wraps it in detached tasks.
 enum ManifestStore {
     static let stageLabels: [String: String] = [
-        "frames": "Frames", "sfm": "COLMAP", "dense": "OpenMVS", "landmarks": "Landmarks", "preview": "Preview", "plan": "Plan",
+        "frames": "Frames", "sfm": "COLMAP", "dense": "OpenMVS", "landmarks": "Landmarks", "preview": "Preview",
+        "solve": "Scale & level", "ortho": "Orthomosaic", "draw": "Drawing",
     ]
     static let videoExtensions: Set<String> = ["mov", "mp4", "m4v", "mkv", "avi"]
 
@@ -46,8 +47,9 @@ enum ManifestStore {
                     thumbnail: existing(a.appending(path: "thumb.jpg")),
                     preview: existing(a.appending(path: "preview.usdz")),
                     prompts: try? decode(PromptSet.self, a.appending(path: "measure/prompts.json")),
-                    answers: loadAnswers(a),
-                    transform: try? decode(Transform.self, a.appending(path: "transform.json"))))
+                    constraints: loadConstraints(a),
+                    transform: try? decode(Transform.self, a.appending(path: "transform.json")),
+                    overlay: try? decode(PlanOverlay.self, a.appending(path: "overlay.json"))))
             }
             assets.sort { $0.asset.createdAt < $1.asset.createdAt }
 
@@ -71,8 +73,8 @@ enum ManifestStore {
         Int(String(id.reversed().prefix { $0.isNumber }.reversed())) ?? 0
     }
 
-    static func loadAnswers(_ assetDir: URL) -> [String: Answer] {
-        (try? decode([String: Answer].self, assetDir.appending(path: "measure/answers.json"))) ?? [:]
+    static func loadConstraints(_ assetDir: URL) -> Constraints {
+        (try? decode(Constraints.self, assetDir.appending(path: "measure/constraints.json"))) ?? Constraints()
     }
 
     /// Whether the run's process is still alive.  A run marked running whose process is gone is marked
@@ -139,19 +141,15 @@ enum ManifestStore {
         _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
     }
 
-    static func saveAnswer(assetDir: URL, promptId: String, answer: Answer?) throws {
-        let file = assetDir.appending(path: "measure/answers.json")
-        var all = loadAnswers(assetDir)
-        if var a = answer, !a.isEmpty {
-            a.at = Format.now()
-            all[promptId] = a
-        } else {
-            all.removeValue(forKey: promptId)
-        }
+    /// Read → mutate → write the asset's measurements.
+    static func updateConstraints(assetDir: URL, _ mutate: (inout Constraints) -> Void) throws {
+        let file = assetDir.appending(path: "measure/constraints.json")
+        var c = loadConstraints(assetDir)
+        mutate(&c)
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try enc.encode(all).write(to: file, options: .atomic)
+        try enc.encode(c).write(to: file, options: .atomic)
     }
 
     static func trash(_ url: URL) throws {

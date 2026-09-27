@@ -1,0 +1,52 @@
+# XcodeGen spec for the native Mac app.  `make xcode` generates BackyardScanner.xcodeproj (git-ignored) and opens it;
+# `make app` builds it from the command line into app/build/.
+name: BackyardScanner
+options:
+  bundleIdPrefix: com.yonatanbebchuk
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: NO
+    ENABLE_APP_SANDBOX: NO
+    ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    SWIFT_EMIT_LOC_STRINGS: NO
+    DEAD_CODE_STRIPPING: YES
+targets:
+  BackyardScanner:
+    type: application
+    platform: macOS
+    sources:
+      - path: BackyardScanner
+    settings:
+      base:
+        PRODUCT_NAME: "Backyard Scanner"
+        PRODUCT_BUNDLE_IDENTIFIER: com.yonatanbebchuk.BackyardScanner
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Backyard Scanner
+        CFBundleShortVersionString: "0.1"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "26.0"
+        LSApplicationCategoryType: public.app-category.graphics-design
+        NSHumanReadableCopyright: "Yonatan Bebchuk"
+        NSSupportsAutomaticTermination: false
+        NSSupportsSuddenTermination: false
+schemes:
+  BackyardScanner:
+    build:
+      targets:
+        BackyardScanner: all
+    run:
+      config: Debug
+    archive:
+      config: Release

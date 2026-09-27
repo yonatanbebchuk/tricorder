@@ -2,6 +2,8 @@
 #
 #   make setup                                     # brew deps, Python env, OpenMVS build
 #   make ui                                        # web UI at http://127.0.0.1:8765  (upload, run, measure, plan)
+#   make app                                       # build + open the native Mac app (app/, needs Xcode 26+, xcodegen)
+#   make xcode                                     # generate app/BackyardScanner.xcodeproj and open it in Xcode
 #   make new VIDEO=data/backyard.MOV NAME="Backyard"   # create scan + run and execute it now (foreground)
 #   make run SCAN=backyard RUN=r1                  # (re)execute a run: frames if needed -> sfm -> dense -> landmarks
 #   make plan SCAN=backyard RUN=r1                 # after answering the measurement prompts
@@ -18,13 +20,20 @@ MATCHER  ?= BRUTEFORCE
 MATCHING ?= vocab
 RES_LEVEL ?= 2
 
-.PHONY: setup ui new run plan list lidar migrate
+.PHONY: setup ui app xcode new run plan list lidar migrate
 
 setup:
 	./setup.sh
 
 ui:
 	.venv/bin/uvicorn ui.server:app --host 127.0.0.1 --port 8765 --reload
+
+app:        # native Mac app -> app/build/Build/Products/Release/Backyard Scanner.app
+	cd app && xcodegen generate --quiet && xcodebuild -project BackyardScanner.xcodeproj -scheme BackyardScanner \
+	    -configuration Release -derivedDataPath build -quiet build && open "build/Build/Products/Release/Backyard Scanner.app"
+
+xcode:
+	cd app && xcodegen generate --quiet && open BackyardScanner.xcodeproj
 
 new:
 	caffeinate -i -s $(PY) -m scanner.pipeline new $(VIDEO) --name "$(NAME)" --fps $(FPS) --max-frames $(MAXF) \

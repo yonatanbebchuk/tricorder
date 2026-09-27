@@ -7,3 +7,7 @@ __pycache__/
 # OpenMVS writes a log next to wherever it is run
 *-[0-9A-F]*.log
 .DS_Store
+# native Mac app: generated project and build products (app/project.yml is the source of truth)
+app/BackyardScanner.xcodeproj/
+app/build/
+xcuserdata/

@@ -68,6 +68,20 @@ work/scans/<scan>/runs/<r>/         database.db, sparse/, dense/, measure/, prev
 `scanner/pipeline.py` orchestrates the stage scripts and keeps the manifests current; the web UI only reads them.
 Two runs of one scan is how you compare settings (e.g. SIFT vs ALIKED + LightGlue) on the same footage.
 
+## Mac app
+
+```bash
+brew install xcodegen      # once; Xcode 26 or newer for Liquid Glass
+make app                   # builds app/ and opens Backyard Scanner.app
+```
+A native SwiftUI app (macOS 26, Liquid Glass) over the same manifests and the same Python orchestrator:
+scans and their runs in the sidebar, a scan page with video facts, notes and the runs table, a run page with
+the five stages, live stage logs, the *Measure* panel, the scale result and true-scale plan, and every output.
+It watches `work/scans` with FSEvents, so what the pipeline writes appears at once, and it starts pipeline work
+with `python -m scanner.pipeline launch …` (detached, under `caffeinate`), so quitting the app never kills a run.
+The app finds the checkout it was built in on its own; Settings lets you point it elsewhere.
+Sources: `app/BackyardScanner/` (XcodeGen spec in `app/project.yml`; `make xcode` opens the project).
+
 ## Web UI
 
 ```bash

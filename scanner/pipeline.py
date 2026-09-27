@@ -4,6 +4,7 @@
     python -m scanner.pipeline run   <scan_id> <run_id>      # frames (if needed) -> sfm -> dense -> landmarks
     python -m scanner.pipeline plan  <scan_id> <run_id>      # scale/level/north from answers, plan render
     python -m scanner.pipeline new-run <scan_id> [--features ALIKED ...] [--start]
+    python -m scanner.pipeline launch run <scan_id> <run_id>   # detached (own session, caffeinate); used by the Mac app
 
 Stage scripts are unchanged (scripts/01..06, 02_sfm.sh, 03_dense.sh, pick_landmarks.py, solve_scale.py);
 this module only decides what to run, where to log, and records status + metrics.
@@ -284,6 +285,8 @@ def main(argv=None) -> int:
     p = sub.add_parser("run"); p.add_argument("scan_id"); p.add_argument("run_id")
     p = sub.add_parser("plan"); p.add_argument("scan_id"); p.add_argument("run_id"); p.add_argument("--px-per-m", type=int, default=50)
     p = sub.add_parser("list")
+    p = sub.add_parser("launch", help="start a pipeline command detached (own session, under caffeinate) and return at once")
+    p.add_argument("args", nargs=argparse.REMAINDER, help="e.g. run <scan_id> <run_id>  or  plan <scan_id> <run_id> --px-per-m 50")
     a = ap.parse_args(argv)
 
     if a.cmd in ("new", "new-run"):
@@ -299,6 +302,11 @@ def main(argv=None) -> int:
         return run_pipeline(a.scan_id, a.run_id)
     if a.cmd == "plan":
         return run_plan(a.scan_id, a.run_id, a.px_per_m)
+    if a.cmd == "launch":
+        if not a.args:
+            ap.error("launch needs a pipeline command")
+        launch(a.args)
+        return 0
     if a.cmd == "list":
         from .models import list_scans
         for s in list_scans():

@@ -69,7 +69,7 @@ An **environment** is a place you scan (the backyard). It holds three things, al
 
 | | what | where |
 |---|---|---|
-| **Recordings** | raw data that was sensed: the iPhone video (copied in), its metadata, the frames extracted from it | `work/environments/<env>/recordings/<rec>/` |
+| **Recordings** | raw data that was sensed: an iPhone video (copied in, its metadata, the frames extracted from it), or a set of tape measurements marked on a video's frames | `work/environments/<env>/recordings/<rec>/` |
 | **Runs** | processing jobs. An **environment scan** (`scan`) turns a recording into a 3D model; a **layout** (`layout`) turns a measured 3D model into a site plan. A run has stages, logs, settings and working files, and publishes exactly one asset | `work/environments/<env>/runs/<run>/` |
 | **Assets** | what runs produce: a **3D Model** (`model3d`: dense cloud, textured mesh, camera poses, preview plan, measurement prompts, USDZ preview) or a **Site Plan** (`site_plan`: orthomosaic with world file, DEM, contour lines, footprint, the DXF drawing, a PDF sheet at scale, the Blender scene, the metric cloud). Files are APFS clones of the run's deliverables, so an asset costs no extra disk | `work/environments/<env>/assets/<asset>/` |
 
@@ -78,9 +78,12 @@ asset of each kind is the environment's *current* state. Runs can consume earlie
 which is how one asset becomes the input of the next. `tricorder/pipeline.py` orchestrates the stage scripts and is the
 only writer of run status; the app only writes names, notes and your measurements.
 
-Measurements live on the 3D model as `measure/constraints.json`: distance constraints (two points in the model's frame
-plus the metres you taped), the level check and the north bearing. Today they come from the prompts the landmark picker
-suggests; picking points in the 3D viewer or on a frame will write the same file. See `docs/COMPUTATIONS.md`.
+Tape measurements are **recordings** too (kind `measurements`): in the app you browse the frames of a video, click two
+points on one, and type the metres you taped between them, as many as you like, plus an optional compass bearing at a
+frame. A layout takes a 3D model and any number of measurement recordings; `scripts/measure_project.py` casts each pair
+of pixels through that frame's camera onto the model's mesh to get the 3D constraints the scale solver uses. With no
+measurement recording the scale is *estimated* from the camera height above the ground (phone at chest height, about
+±10 %) and the plan says so. See `docs/COMPUTATIONS.md`.
 
 ## Mac app
 
@@ -103,7 +106,7 @@ Sources: `app/Tricorder/` (XcodeGen spec in `app/project.yml`; `make xcode` open
 make new VIDEO=data/backyard.MOV NAME="Backyard" MAXF=600     # environment + recording + scan run, executes now
 make run ENV=backyard RUN=r1                                    # (re)execute: finished stages are kept, asset re-published
 python -m tricorder.pipeline run backyard r1 --redo preview     # redo one stage (e.g. a lighter 3D preview)
-make layout ENV=backyard ASSET=model3d-1                        # after entering the model's measurements
+make layout ENV=backyard ASSET=model3d-1                        # scale estimated; add MEAS="rec2 rec3" for measured scale
 make list
 python -m tricorder.pipeline new-run backyard scan --recording rec1 --features ALIKED --matcher LIGHTGLUE --start
 python -m tricorder.pipeline new-recording backyard data/evening.MOV --name "Evening walk"

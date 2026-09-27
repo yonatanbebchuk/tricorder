@@ -88,18 +88,22 @@ struct ModelViewer: View {
     @State private var failed = false
     @State private var tooBig = false
     @State private var wanted = false
+    @State private var resetToken = 0
 
     private var size: Int { (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0 }
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             if let scene {
-                SceneKitView(scene: scene)
-                Text("drag to orbit · scroll to zoom · ⌥ drag to pan")
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .glassEffect()
-                    .padding(8)
+                SceneKitView(scene: scene, resetToken: resetToken)
+                HStack(spacing: 10) {
+                    Text("drag to orbit · scroll to zoom · ⌥ drag to pan").font(.caption2).foregroundStyle(.secondary)
+                    Button("Recenter", systemImage: "scope") { resetToken += 1 }
+                        .font(.caption).buttonStyle(.borderless).help("Back to the home view of the model")
+                }
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .glassEffect()
+                .padding(8)
             } else if failed {
                 ContentUnavailableView("Preview didn’t load", systemImage: "cube.transparent", description: Text(url.lastPathComponent))
             } else if tooBig && !wanted {
@@ -126,6 +130,14 @@ struct ModelViewer: View {
 
 struct SceneKitView: NSViewRepresentable {
     let scene: SCNScene
+    var resetToken = 0
+
+    final class Coordinator {
+        var home: SCNMatrix4?
+        var token = 0
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> SCNView {
         let v = SCNView()
@@ -144,6 +156,14 @@ struct SceneKitView: NSViewRepresentable {
         if v.scene !== scene {
             v.scene = scene
             v.pointOfView = scene.rootNode.childNode(withName: "PreviewCamera", recursively: false)
+            context.coordinator.home = v.pointOfView?.transform
+            context.coordinator.token = resetToken
+        } else if context.coordinator.token != resetToken, let home = context.coordinator.home, let cam = v.pointOfView {
+            context.coordinator.token = resetToken
+            SCNTransaction.begin()
+            SCNTransaction.animationDuration = 0.5
+            cam.transform = home
+            SCNTransaction.commit()
         }
     }
 

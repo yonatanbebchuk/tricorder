@@ -22,7 +22,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $ws.showNewEnvironment) { NewEnvironmentSheet(initialVideo: ws.pendingVideo) }
-        .sheet(item: $ws.newRecordingFor) { ref in NewRecordingSheet(envId: ref.id, initialVideo: ws.pendingVideo) }
+        .sheet(item: $ws.newRecordingFor) { ref in NewRecordingSheet(envId: ref.id, initialVideo: ws.pendingVideo, measurements: ws.newRecordingMeasurements) }
         .sheet(item: $ws.newRunRequest) { req in NewRunSheet(request: req) }
         .alert("Something went wrong", isPresented: Binding(get: { ws.lastError != nil }, set: { if !$0 { ws.lastError = nil } })) {
             Button("OK") {}

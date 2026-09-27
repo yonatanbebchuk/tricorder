@@ -18,6 +18,7 @@ final class Workspace {
     // sheets
     var showNewEnvironment = false
     var newRecordingFor: EnvRef?
+    var newRecordingMeasurements = false
     var newRunRequest: NewRunRequest?
     var pendingVideo: URL?
     var lastError: String?
@@ -138,8 +139,9 @@ final class Workspace {
         showNewEnvironment = true
     }
 
-    func requestNewRecording(env: String, video: URL? = nil) {
+    func requestNewRecording(env: String, video: URL? = nil, measurements: Bool = false) {
         pendingVideo = video
+        newRecordingMeasurements = measurements
         newRecordingFor = EnvRef(id: env)
     }
 
@@ -181,10 +183,30 @@ final class Workspace {
         }
     }
 
-    func createRun(env: String, kind: RunKind, inputId: String, settings: RunSettings, label: String) async -> Bool {
+    /// A measurement recording with its items; opens it when done.
+    func createMeasurementRecording(env: String, name: String, items: [MeasurementItem], north: MeasurementNorth?) async -> Bool {
+        guard let root else { return false }
+        return await attempt("Saving the measurements failed") {
+            let rec = try await Pipeline.createMeasurements(root: root, envId: env, name: name)
+            let dir = ManifestStore.environmentsDir(root).appending(path: "\(env)/recordings/\(rec)")
+            try await Task.detached { try ManifestStore.saveMeasurements(recordingDir: dir, items: items, north: north) }.value
+            await refresh()
+            open(.recording(env, rec))
+        }
+    }
+
+    func saveMeasurements(_ r: RecordingRecord, items: [MeasurementItem], north: MeasurementNorth?) async {
+        let dir = r.dir
+        _ = await attempt("Saving the measurements failed") {
+            try await Task.detached { try ManifestStore.saveMeasurements(recordingDir: dir, items: items, north: north) }.value
+            await refresh()
+        }
+    }
+
+    func createRun(env: String, kind: RunKind, inputId: String, recordings: [String] = [], settings: RunSettings, label: String) async -> Bool {
         guard let root else { return false }
         return await attempt("Starting the run failed") {
-            let run = try await Pipeline.createRun(root: root, envId: env, kind: kind, inputId: inputId, settings: settings, label: label)
+            let run = try await Pipeline.createRun(root: root, envId: env, kind: kind, inputId: inputId, recordings: recordings, settings: settings, label: label)
             await refresh()
             open(.run(env, run))
         }

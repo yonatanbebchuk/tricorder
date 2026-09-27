@@ -9,6 +9,8 @@ struct RecordingRecord: Identifiable, Hashable, Sendable {
 
     var id: String { "\(rec.envId)/\(rec.id)" }
     var isBusy: Bool { rec.frames.status == .running }
+    var isMeasurements: Bool { rec.isMeasurements }
+    var imagesDir: URL { dir.appending(path: "images") }
 }
 
 struct RunRecord: Identifiable, Hashable, Sendable {
@@ -40,7 +42,6 @@ struct AssetRecord: Identifiable, Hashable, Sendable {
         return nil
     }
     var hasTexturedMesh: Bool { has("dense/scene_dense_mesh_texture.obj") }
-    var answeredCount: Int { constraints.distances.count }
 }
 
 struct EnvironmentRecord: Identifiable, Hashable, Sendable {
@@ -76,12 +77,18 @@ struct EnvironmentRecord: Identifiable, Hashable, Sendable {
             ?? currentAssets.first?.thumbnail
             ?? recordings.first?.thumbnail
     }
-    func runsUsing(recording id: String) -> [RunRecord] { runs.filter { $0.run.inputRecordingId == id } }
+    func runsUsing(recording id: String) -> [RunRecord] { runs.filter { $0.run.inputRecordingIds.contains(id) } }
+    var videoRecordings: [RecordingRecord] { recordings.filter { !$0.isMeasurements } }
+    var measurementRecordings: [RecordingRecord] { recordings.filter { $0.isMeasurements } }
     func runsUsing(asset id: String) -> [RunRecord] { runs.filter { $0.run.inputAssetId == id } }
     /// The asset (if any) a run consumed, for labels and links.
     func inputName(of run: Run) -> String {
         if let r = run.inputRecordingId { return recording(r)?.rec.name ?? r }
-        if let a = run.inputAssetId { return asset(a)?.asset.name ?? a }
+        if let a = run.inputAssetId {
+            let base = asset(a)?.asset.name ?? a
+            let m = run.inputRecordingIds
+            return m.isEmpty ? base + " (scale estimated)" : base + " + \(m.count) measurement\(m.count == 1 ? "" : "s")"
+        }
         return "–"
     }
 }

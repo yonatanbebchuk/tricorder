@@ -6,7 +6,7 @@
 #   make xcode                                     # generate app/Tricorder.xcodeproj and open it in Xcode
 #   make new VIDEO=data/backyard.MOV NAME="Backyard"   # environment + recording + scan run, executed now (foreground)
 #   make run ENV=backyard RUN=r1                   # (re)execute a run: finished stages are kept, then the asset is published
-#   make layout ENV=backyard ASSET=model3d-1       # site plan (DXF, PDF, orthomosaic, contours) from a measured 3D model
+#   make layout ENV=backyard ASSET=model3d-1 MEAS="rec2"   # site plan (DXF, PDF, orthomosaic, contours) from a 3D model + measurements
 #   make list                                      # environments, recordings, runs, assets
 #   make migrate                                   # old work/scans layout -> work/environments
 #   make lidar LIDAR=data/stray_dataset            # alt: metric mesh from a Stray Scanner LiDAR recording
@@ -41,7 +41,7 @@ run:
 	caffeinate -i -s $(PY) -m tricorder.pipeline run $(ENV) $(RUN)
 
 layout:
-	caffeinate -i -s $(PY) -m tricorder.pipeline new-run $(ENV) layout --asset $(ASSET) --px-per-m $(PXM) --start
+	caffeinate -i -s $(PY) -m tricorder.pipeline new-run $(ENV) layout --asset $(ASSET) --recordings $(MEAS) --px-per-m $(PXM) --start
 
 list:
 	$(PY) -m tricorder.pipeline list

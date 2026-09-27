@@ -5,7 +5,8 @@
     python -m tricorder.pipeline new-env "Backyard"
     python -m tricorder.pipeline new-recording <env> data/walk.MOV [--name ... --fps 2 --max-frames 400 --hdr auto]
     python -m tricorder.pipeline new-run <env> scan --recording rec1 [--features ALIKED ...] [--start]
-    python -m tricorder.pipeline new-run <env> layout --asset model3d-1 [--px-per-m 50 --contour 0.25] [--start]
+    python -m tricorder.pipeline new-measurements <env> --name "Tape, Saturday"   # then add items in the app
+    python -m tricorder.pipeline new-run <env> layout --asset model3d-1 --recordings rec2 [--px-per-m 50 --contour 0.25] [--start]
     python -m tricorder.pipeline run    <env> <run> [--redo preview]   # execute (finished stages kept unless redone), publish
     python -m tricorder.pipeline launch run <env> <run>      # same, detached (own session, caffeinate); used by the Mac app
     python -m tricorder.pipeline list
@@ -26,6 +27,8 @@ import sys
 from pathlib import Path
 
 from . import metrics
+from typing import Any
+
 from .models import (ASSET_KINDS, DATA, ENVS, ROOT, RUN_KINDS, VIDEO_EXT, Asset, Environment, FrameSettings, Recording,
                      Run, RunSettings, Stage, next_id, now, slugify, unique_id)
 
@@ -36,10 +39,10 @@ BLENDER = os.environ.get("BLENDER", "/Applications/Blender.app/Contents/MacOS/Bl
 # What a run hands over to its asset (paths relative to the run dir; globs allowed; directories are copied whole).
 DELIVERABLES = {
     "model3d": ["dense/scene_dense.ply", "dense/scene_dense_mesh_clean.ply", "dense/scene_dense_mesh_texture.obj",
-                "dense/scene_dense_mesh_texture.mtl", "dense/scene_dense_mesh_texture_*_map_Kd.jpg", "dense/sparse",
+                "dense/scene_dense_mesh_texture.mtl", "dense/scene_dense_mesh_texture_*_map_Kd.jpg", "dense/sparse", "sparse",
                 "database.db", "sparse_points.ply", "preview_plan.png", "preview_plan_grid.png", "preview_plan.json",
                 "preview_plan.blend", "transform_preview.json", "measure", "preview.usdz", "thumb.jpg"],
-    "site_plan": ["transform.json", "orthomosaic.png", "orthomosaic.json", "orthomosaic.pgw", "dem.tif", "dem.json",
+    "site_plan": ["transform.json", "measure", "orthomosaic.png", "orthomosaic.json", "orthomosaic.pgw", "dem.tif", "dem.json",
                   "contours.json", "footprint.json", "overlay.json", "site_plan.dxf", "site_plan.pdf", "site_plan.blend",
                   "scene_dense_metric.ply", "preview.usdz", "thumb.jpg"],
 }
@@ -48,7 +51,8 @@ FILE_LABELS = {
     "dense/scene_dense.ply": "Dense point cloud",
     "dense/scene_dense_mesh_clean.ply": "Mesh, cleaned + decimated",
     "dense/scene_dense_mesh_texture.obj": "Textured mesh (OBJ + MTL + JPG)",
-    "dense/sparse/images.txt": "Camera poses (COLMAP)",
+    "dense/sparse/images.txt": "Camera poses, undistorted (COLMAP)",
+    "sparse/0/images.bin": "Camera poses, original (COLMAP)",
     "database.db": "COLMAP database (features, matches)",
     "preview_plan_grid.png": "Preview plan, unscaled, 1 m grid",
     "preview_plan.blend": "Preview Blender scene",
@@ -105,25 +109,39 @@ def create_recording(env: Environment, video: Path, name: str | None = None, fs:
     return rec
 
 
-def create_run(env: Environment, kind: str, inputs: dict[str, str], settings: RunSettings | None = None, label: str = "") -> Run:
+def create_measurements(env: Environment, name: str) -> Recording:
+    """An empty measurement recording; the app fills its items."""
+    rec = Recording(id=next_id(env.dir / "recordings", "rec"), env_id=env.id, name=name, created_at=now(), kind="measurements")
+    rec.dir.mkdir(parents=True, exist_ok=True)
+    rec.save()
+    return rec
+
+
+def create_run(env: Environment, kind: str, inputs: dict[str, Any], settings: RunSettings | None = None, label: str = "") -> Run:
     spec = RUN_KINDS.get(kind)
     if not spec:
         raise ValueError(f"unknown run kind {kind!r}")
     if spec["input"] == "recording":
         rec = Recording.load(env.id, inputs.get("recording", ""))
+        if rec.kind != "video":
+            raise ValueError(f"{kind} needs a video recording, {rec.id} is {rec.kind}")
     else:
         asset = Asset.load(env.id, inputs.get("asset", ""))
         if asset.kind != spec["input"]:
             raise ValueError(f"{kind} needs a {ASSET_KINDS[spec['input']]} asset, {asset.id} is a {ASSET_KINDS[asset.kind]}")
+        for rid in inputs.get("recordings", []) or []:
+            m = Recording.load(env.id, rid)
+            if m.kind != "measurements":
+                raise ValueError(f"{rid} is a {m.kind} recording, not measurements")
     run = Run(id=next_id(env.dir / "runs", "r"), env_id=env.id, kind=kind, inputs=dict(inputs), created_at=now(),
               settings=settings or RunSettings(), label=label)
     run.save()
     (run.dir / "logs").mkdir(exist_ok=True)
     if kind == "scan":
         _link(run.dir / "images", f"../../recordings/{rec.id}/images")
-    else:                                    # the layout scripts expect dense/ and measure/ next to their work dir
+    else:                                    # the layout scripts expect dense/ next to their work dir; measure/ is built by solve
         _link(run.dir / "dense", f"../../assets/{asset.id}/dense")
-        _link(run.dir / "measure", f"../../assets/{asset.id}/measure")
+        (run.dir / "measure").mkdir(exist_ok=True)
     return run
 
 
@@ -237,8 +255,12 @@ def stage_landmarks(run: Run) -> None:
 
 
 def stage_solve(run: Run) -> None:
-    """Scale, level and north from the measurements; the dense cloud in metres."""
+    """Measurement recordings -> 3D constraints on this model; scale, level and north; the dense cloud in metres."""
     def fn(log: Path) -> dict:
+        asset = Asset.load(run.env_id, run.inputs["asset"])
+        recs = [str(Recording.load(run.env_id, r).dir) for r in run.inputs.get("recordings", []) or []]
+        _check(_exec([PY, str(SCRIPTS / "measure_project.py"), str(run.dir), "--model", str(asset.dir), "--recordings", *recs], log),
+               "measurement projection")
         _check(_exec([PY, str(SCRIPTS / "solve_scale.py"), str(run.dir)], log), "scale solve")
         rc = _exec([PY, "-c", (
             "import json,sys,numpy as np,open3d as o3d;from pathlib import Path;w=Path(sys.argv[1]);"
@@ -246,7 +268,12 @@ def stage_solve(run: Run) -> None:
             "p.transform(T);o3d.io.write_point_cloud(str(w/'scene_dense_metric.ply'),p);e=p.get_axis_aligned_bounding_box().get_extent();"
             "print(f'metric cloud: {e[0]:.1f} m x {e[1]:.1f} m, height {e[2]:.1f} m')"), str(run.dir)], log)
         _check(rc, "metric cloud")
-        return metrics.plan_metrics(run.dir)
+        m = metrics.plan_metrics(run.dir)
+        t = json.load(open(run.dir / "transform.json"))
+        m["estimated"] = bool(t.get("estimated", False))
+        c = json.load(open(run.dir / "measure" / "constraints.json"))
+        m["skipped"] = len(c.get("skipped", []))
+        return m
     _stage(run, "solve", fn)
 
 
@@ -451,10 +478,13 @@ def main(argv=None) -> int:
     p = sub.add_parser("new-env", help="create an empty environment"); p.add_argument("name")
     p = sub.add_parser("new-recording", help="add a video to an environment")
     p.add_argument("env_id"); p.add_argument("video"); p.add_argument("--name"); add_frame_args(p)
+    p = sub.add_parser("new-measurements", help="add an empty measurement recording (the app fills it)")
+    p.add_argument("env_id"); p.add_argument("--name", default="Measurements")
     p = sub.add_parser("new-run", help="add a run to an environment")
     p.add_argument("env_id"); p.add_argument("kind", choices=list(RUN_KINDS))
-    p.add_argument("--recording", help="input recording id (scan)")
+    p.add_argument("--recording", help="input video recording id (scan)")
     p.add_argument("--asset", help="input 3D-model asset id (layout)")
+    p.add_argument("--recordings", nargs="*", default=[], help="measurement recording ids (layout); none = estimated scale")
     add_run_settings(p)
     p = sub.add_parser("run", help="execute a run; finished stages are kept unless --redo names them")
     p.add_argument("env_id"); p.add_argument("run_id")
@@ -479,9 +509,14 @@ def main(argv=None) -> int:
         rec = create_recording(env, Path(a.video), a.name, FrameSettings(fps=a.fps, max_frames=a.max_frames, hdr=a.hdr))
         print(f"env {env.id}  recording {rec.id}  -> {rec.dir}")
         return 0
+    if a.cmd == "new-measurements":
+        env = Environment.load(a.env_id)
+        rec = create_measurements(env, a.name)
+        print(f"env {env.id}  recording {rec.id}  -> {rec.dir}")
+        return 0
     if a.cmd == "new-run":
         env = Environment.load(a.env_id)
-        inputs = {"recording": a.recording} if a.kind == "scan" else {"asset": a.asset}
+        inputs: dict = {"recording": a.recording} if a.kind == "scan" else {"asset": a.asset, "recordings": a.recordings}
         if not next(iter(inputs.values())):
             ap.error("scan needs --recording, layout needs --asset")
         run = create_run(env, a.kind, inputs, _settings_from(a), a.label)
@@ -500,10 +535,11 @@ def main(argv=None) -> int:
             print(f"{e.id:24s} {e.name}")
             for r in e.recording_ids():
                 rec = Recording.load(e.id, r)
-                print(f"    recording {r:8s} {rec.name:28s} frames={rec.frames.status}")
+                print(f"    recording {r:8s} {rec.name:28s} " + (f"{len(rec.items)} measurements" if rec.kind == "measurements" else f"frames={rec.frames.status}"))
             for r in e.run_ids():
                 run = Run.load(e.id, r)
                 print(f"    run       {r:8s} {run.kind:12s} {run.status:10s} inputs={run.inputs} -> {run.output_asset}")
+            
             for aid in e.asset_ids():
                 asset = Asset.load(e.id, aid)
                 print(f"    asset     {aid:10s} {asset.name:28s} from {asset.run_id}")

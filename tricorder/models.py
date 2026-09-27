@@ -37,11 +37,11 @@ ASSET_KINDS = {"model3d": "3D Model", "site_plan": "Site Plan"}
 STAGE_LABELS = {"frames": "Frames", "sfm": "COLMAP", "dense": "OpenMVS", "landmarks": "Landmarks", "preview": "Preview",
                 "solve": "Scale & level", "ortho": "Orthomosaic", "draw": "Drawing"}
 
-# measure/constraints.json on a 3D-model asset (written by the app, read by scripts/solve_scale.py):
-#   {"distances": [{"id", "source": "prompt|viewer|snapshot", "prompt_id"?, "a": [x,y,z], "b": [x,y,z], "meters", "note", "at"}],
-#    "skipped_prompts": [prompt ids], "level": {"source", "confirmed", "points": [[x,y,z] x3]} | null,
-#    "north": {"source", "frame", "forward": [x,y,z], "bearing"} | null}
-# Points are in the model's own coordinate frame, whatever produced them.
+# measure/constraints.json in a layout run (written by scripts/measure_project.py from the measurement recordings,
+# read by scripts/solve_scale.py):
+#   {"distances": [{"id", "source": "snapshot", "recording", "frame", "a": [x,y,z], "b": [x,y,z], "meters", "note", "at"}],
+#    "north": {"source", "frame", "forward": [x,y,z], "bearing"} | null, "up": [x,y,z], "cameras": [[x,y,z], ...]}
+# Points are in the model's own coordinate frame.
 
 
 def now() -> str:
@@ -190,12 +190,17 @@ class Recording:
     env_id: str
     name: str
     created_at: str
-    kind: str = "video"                          # video (images and designs later)
-    source: dict[str, Any] = field(default_factory=dict)   # path (relative to ROOT), size, duration_s, width, height, fps, hdr ...
+    kind: str = "video"                          # video | measurements (photos and designs later)
+    source: dict[str, Any] = field(default_factory=dict)   # video: path (relative to ROOT), size, duration_s, width, height, fps, hdr ...
     frames: Stage = field(default_factory=Stage)
     frame_settings: FrameSettings = field(default_factory=FrameSettings)
     notes: str = ""
     thumbnail: str | None = None                 # relative to the recording dir
+    # measurements: things you taped on site, each tied to a frame of a video recording of this environment
+    #   items: [{id, recording, frame, a: [u, v], b: [u, v], meters, note, image_size: [w, h], at}]
+    #   north: {recording, frame, bearing} | null      compass bearing of that frame's viewing direction
+    items: list[dict[str, Any]] = field(default_factory=list)
+    north: dict[str, Any] | None = None
 
     @property
     def dir(self) -> Path:
@@ -254,7 +259,7 @@ class Run:
     id: str
     env_id: str
     kind: str                                    # scan | layout
-    inputs: dict[str, str]                       # {"recording": "rec1"} or {"asset": "model3d-1"}
+    inputs: dict[str, Any]                       # scan: {"recording": "rec1"}; layout: {"asset": "model3d-1", "recordings": ["rec2", ...]}
     created_at: str
     settings: RunSettings = field(default_factory=RunSettings)
     status: str = "queued"                       # queued | running | done | failed | cancelled | interrupted

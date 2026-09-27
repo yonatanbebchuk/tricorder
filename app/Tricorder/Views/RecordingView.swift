@@ -1,6 +1,89 @@
 import SwiftUI
 
 struct RecordingView: View {
+    let env: EnvironmentRecord
+    let record: RecordingRecord
+
+    var body: some View {
+        if record.isMeasurements { MeasurementsRecordingView(env: env, record: record) } else { VideoRecordingView(env: env, record: record) }
+    }
+
+    var pageContent: some View {
+        Group {
+            if record.isMeasurements { MeasurementsRecordingView(env: env, record: record).pageContent } else { VideoRecordingView(env: env, record: record).pageContent }
+        }
+    }
+}
+
+/// A measurement recording: the taped lengths, editable in place.
+struct MeasurementsRecordingView: View {
+    @Environment(Workspace.self) private var ws
+    let env: EnvironmentRecord
+    let record: RecordingRecord
+
+    @State private var items: [MeasurementItem]
+    @State private var north: MeasurementNorth?
+    @State private var confirmDelete = false
+
+    init(env: EnvironmentRecord, record: RecordingRecord) {
+        self.env = env
+        self.record = record
+        _items = State(initialValue: record.rec.items)
+        _north = State(initialValue: record.rec.north)
+    }
+
+    private var runs: [RunRecord] { env.runsUsing(recording: record.rec.id).reversed() }
+
+    var body: some View {
+        ScrollView { pageContent }
+            .scrollEdgeEffectStyle(.soft, for: .top)
+            .navigationTitle(record.rec.name)
+            .navigationSubtitle("\(items.count) measurement\(items.count == 1 ? "" : "s")")
+            .toolbar {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button("Lay Out", systemImage: "map") { ws.requestNewRun(env: env.id, kind: .layout) }
+                        .disabled(env.assets.filter { $0.asset.kind == .model3d }.isEmpty)
+                        .help("Start a layout using these measurements")
+                    Button("Show in Finder", systemImage: "folder") { ws.reveal(record.dir) }
+                    Menu {
+                        Button("Delete Recording…", role: .destructive) { confirmDelete = true }.disabled(!runs.isEmpty)
+                    } label: {
+                        Label("More", systemImage: "ellipsis.circle")
+                    }
+                }
+            }
+            .confirmationDialog("Delete “\(record.rec.name)”?", isPresented: $confirmDelete) {
+                Button("Move to Trash", role: .destructive) { Task { await ws.deleteRecording(record) } }
+            }
+            .onChange(of: items) { _, new in if new != record.rec.items { Task { await ws.saveMeasurements(record, items: new, north: north) } } }
+            .onChange(of: north) { _, new in if new != record.rec.north { Task { await ws.saveMeasurements(record, items: items, north: new) } } }
+    }
+
+    var pageContent: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: "ruler").foregroundStyle(Theme.accent).font(.title2)
+                    Text(record.rec.name).font(Theme.display(30))
+                    Text(record.rec.id).font(Theme.mono).foregroundStyle(.secondary)
+                }
+                Text("measurements · \(Format.when(record.rec.createdAt)) · used by \(runs.count) layout\(runs.count == 1 ? "" : "s") · changes are saved as you make them")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            Card("") { MeasurementsEditor(env: env, items: $items, north: $north) }
+            if !runs.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    SectionTitle(title: "Layouts using these measurements") { EmptyView() }
+                    Card("") { RunsTable(env: env, runs: runs) }
+                }
+            }
+        }
+        .padding(28)
+        .frame(maxWidth: 1240, alignment: .leading)
+    }
+}
+
+struct VideoRecordingView: View {
     @Environment(Workspace.self) private var ws
     let env: EnvironmentRecord
     let record: RecordingRecord

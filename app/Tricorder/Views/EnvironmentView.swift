@@ -24,7 +24,7 @@ struct EnvironmentView: View {
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button("Add Recording", systemImage: "video.badge.plus") { ws.requestNewRecording(env: record.id) }
                     Button("New Run", systemImage: "play.fill") { ws.requestNewRun(env: record.id) }
-                        .disabled(record.recordings.isEmpty)
+                        .disabled(record.videoRecordings.isEmpty)
                     Button("Show in Finder", systemImage: "folder") { ws.reveal(record.dir) }
                     Menu {
                         Button("Rename…") { nameFocused = true }
@@ -120,7 +120,7 @@ struct EnvironmentView: View {
 
     private var recordings: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SectionTitle(title: "Recordings", subtitle: "the raw data that was sensed") {
+            SectionTitle(title: "Recordings", subtitle: "the raw data that was sensed: video walks and tape measurements") {
                 Button("Add Recording…", systemImage: "video.badge.plus") { ws.requestNewRecording(env: record.id) }.buttonStyle(.borderless)
             }
             Card("") { RecordingRows(env: record, recordings: record.recordings) }
@@ -257,13 +257,17 @@ struct RecordingRows: View {
 
     var body: some View {
         if recordings.isEmpty {
-            Text("No recordings yet. Film a slow walk of the site and drop the video here.").foregroundStyle(.secondary)
+            Text("No recordings yet. Film a slow walk of the site and drop the video here; tape measurements come later, marked on its frames.").foregroundStyle(.secondary)
         } else {
             ForEach(recordings) { r in
                 Button { ws.open(.recording(env.id, r.rec.id)) } label: {
                     HStack(spacing: 14) {
                         Group {
-                            if let t = r.thumbnail {
+                            if r.isMeasurements, let first = r.rec.items.first {
+                                ItemPreview(item: first, dir: env.recording(first.recording)?.imagesDir, height: 64)
+                            } else if r.isMeasurements {
+                                Rectangle().fill(.quaternary).overlay { Image(systemName: "ruler").foregroundStyle(.secondary) }
+                            } else if let t = r.thumbnail {
                                 FileImage(url: t, maxPixel: 400).aspectRatio(contentMode: .fill)
                             } else {
                                 Rectangle().fill(.quaternary).overlay { Image(systemName: "video").foregroundStyle(.secondary) }
@@ -272,11 +276,17 @@ struct RecordingRows: View {
                         .frame(width: 96, height: 64).clipShape(RoundedRectangle(cornerRadius: 6)).clipped()
                         VStack(alignment: .leading, spacing: 3) {
                             Text(r.rec.name).font(.headline)
-                            Text("\(r.rec.source.fileName) · \(Format.videoLine(r.rec.source))").font(.caption).foregroundStyle(.secondary)
-                            HStack(spacing: 6) {
-                                StatusPill(status: r.rec.frames.status, compact: true)
-                                Text(Format.stageMetrics("frames", r.rec.frames.metrics)).font(.caption).foregroundStyle(.secondary)
-                                Text("· used by \(env.runsUsing(recording: r.rec.id).count) run\(env.runsUsing(recording: r.rec.id).count == 1 ? "" : "s")").font(.caption).foregroundStyle(.tertiary)
+                            if r.isMeasurements {
+                                Text("\(r.rec.items.count) tape measurement\(r.rec.items.count == 1 ? "" : "s")" + (r.rec.north != nil ? " · north bearing" : "")
+                                     + " · used by \(env.runsUsing(recording: r.rec.id).count) layout\(env.runsUsing(recording: r.rec.id).count == 1 ? "" : "s")")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            } else {
+                                Text("\(r.rec.source.fileName) · \(Format.videoLine(r.rec.source))").font(.caption).foregroundStyle(.secondary)
+                                HStack(spacing: 6) {
+                                    StatusPill(status: r.rec.frames.status, compact: true)
+                                    Text(Format.stageMetrics("frames", r.rec.frames.metrics)).font(.caption).foregroundStyle(.secondary)
+                                    Text("· used by \(env.runsUsing(recording: r.rec.id).count) run\(env.runsUsing(recording: r.rec.id).count == 1 ? "" : "s")").font(.caption).foregroundStyle(.tertiary)
+                                }
                             }
                         }
                         Spacer()

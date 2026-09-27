@@ -105,12 +105,22 @@ struct NewEnvironmentSheet: View {
 
 // MARK: - new recording
 
+enum RecordingKind: String, CaseIterable, Identifiable {
+    case video, measurements
+    var id: String { rawValue }
+    var label: String { self == .video ? "Video" : "Measurements" }
+}
+
 struct NewRecordingSheet: View {
     @Environment(Workspace.self) private var ws
     @Environment(\.dismiss) private var dismiss
     let envId: String
     var initialVideo: URL?
+    var measurements = false
 
+    @State private var kind: RecordingKind = .video
+    @State private var items: [MeasurementItem] = []
+    @State private var north: MeasurementNorth?
     @State private var inbox: [VideoFile] = []
     @State private var video: URL?
     @State private var name = ""
@@ -125,8 +135,62 @@ struct NewRecordingSheet: View {
     @State private var message = ""
 
     var body: some View {
+        if kind == .measurements {
+            measurementsBody
+        } else {
+            videoBody
+        }
+    }
+
+    private var kindPicker: some View {
+        Picker("Kind", selection: $kind) { ForEach(RecordingKind.allCases) { Text($0.label).tag($0) } }
+            .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 300)
+    }
+
+    private var measurementsBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Add measurements").font(Theme.display(26))
+                    Spacer()
+                    kindPicker
+                }
+                Text("Things you taped on site, marked on the frames of a video of \(ws.environment(envId)?.env.name ?? "the environment"). Any layout can use them, on any model built from that footage.")
+                    .foregroundStyle(.secondary)
+                TextField("Name", text: $name, prompt: Text("Tape, Saturday")).textFieldStyle(.roundedBorder).frame(maxWidth: 360)
+            }
+            .padding(24)
+            ScrollView {
+                if let env = ws.environment(envId) {
+                    MeasurementsEditor(env: env, items: $items, north: $north).padding(.horizontal, 24)
+                }
+            }
+            HStack {
+                Text(message).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(busy ? "Saving…" : "Save Recording") { createMeasurements() }
+                    .buttonStyle(.glassProminent).keyboardShortcut(.defaultAction)
+                    .disabled(items.isEmpty || busy)
+            }
+            .padding(20)
+        }
+        .frame(width: 1080, height: 900)
+    }
+
+    private func createMeasurements() {
+        busy = true
+        Task {
+            let ok = await ws.createMeasurementRecording(env: envId, name: name.isEmpty ? "Measurements" : name, items: items, north: north)
+            busy = false
+            if ok { dismiss() }
+        }
+    }
+
+    private var videoBody: some View {
         SheetFrame(title: "Add recording", lead: "One filmed walk of \(ws.environment(envId)?.env.name ?? "the environment"). The video is copied into the environment; frames are extracted once.",
-                   width: 680, height: 780) {
+                   width: 680, height: 820) {
+            Section { kindPicker }
             Section("Video") {
                 DropZone(selected: video, onDrop: choose) { importing = true }
                 if !inbox.isEmpty {
@@ -161,6 +225,7 @@ struct NewRecordingSheet: View {
             if let v = initialVideo { choose(v) }
         }
         .onChange(of: video) { _, new in if let new, name.isEmpty { name = suggestedName(new) } }
+        .onAppear { if measurements { kind = .measurements } }
     }
 
     private func choose(_ url: URL) {
@@ -191,7 +256,7 @@ struct NewRunSheet: View {
 
     @State private var kind: RunKind
     @State private var inputId: String?
-    @State private var inputTouched = false
+    @State private var chosenMeasurements: Set<String> = []
     @State private var settings = RunSettings()
     @State private var label = ""
     @State private var busy = false
@@ -207,7 +272,7 @@ struct NewRunSheet: View {
 
     var body: some View {
         SheetFrame(title: "New run", lead: "An environment scan turns a recording into a 3D model; a layout turns a measured 3D model into a site plan. Each run publishes one new asset; earlier assets stay in the history.",
-                   width: 640, height: 560) {
+                   width: 640, height: 640) {
             Section("What to make") {
                 Picker("Kind", selection: $kind) {
                     ForEach(RunKind.allCases, id: \.self) { Text($0.label).tag($0) }
@@ -216,7 +281,7 @@ struct NewRunSheet: View {
                 if kind == .scan {
                     Picker("Recording", selection: $inputId) {
                         Text("—").tag(String?.none)
-                        ForEach(env?.recordings ?? []) { r in
+                        ForEach(env?.videoRecordings ?? []) { r in
                             Text("\(r.rec.name) · \(Format.videoLine(r.rec.source))").tag(String?.some(r.rec.id))
                         }
                     }
@@ -224,11 +289,23 @@ struct NewRunSheet: View {
                     Picker("3D model", selection: $inputId) {
                         Text("—").tag(String?.none)
                         ForEach(scans) { a in
-                            Text("\(a.asset.name) · \(a.answeredCount) measurement\(a.answeredCount == 1 ? "" : "s") · \(Format.when(a.asset.createdAt))").tag(String?.some(a.asset.id))
+                            Text("\(a.asset.name) · \(Format.when(a.asset.createdAt))").tag(String?.some(a.asset.id))
                         }
                     }
-                    if let id = inputId, let a = env?.asset(id), a.answeredCount == 0 {
-                        Text("This model has no measurements yet; the layout would fail. Open the model and enter at least one.").font(.caption).foregroundStyle(Theme.bad)
+                    let measurements = env?.measurementRecordings ?? []
+                    if measurements.isEmpty {
+                        Text("No measurement recordings in this environment. Scale will be estimated from the camera height (phone at chest height, about ±10 %) and the plan marked as estimated. Add a measurements recording for a true-scale plan.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        ForEach(measurements) { m in
+                            Toggle(isOn: Binding(get: { chosenMeasurements.contains(m.rec.id) },
+                                                 set: { on in if on { chosenMeasurements.insert(m.rec.id) } else { chosenMeasurements.remove(m.rec.id) } })) {
+                                Text("\(m.rec.name) · \(m.rec.items.count) measurement\(m.rec.items.count == 1 ? "" : "s")" + (m.rec.north != nil ? " · north" : ""))
+                            }
+                        }
+                        if chosenMeasurements.isEmpty {
+                            Text("None chosen: scale will be estimated from the camera height (about ±10 %).").font(.caption).foregroundStyle(Theme.warn)
+                        }
                     }
                 }
             }
@@ -244,10 +321,11 @@ struct NewRunSheet: View {
                 .disabled(inputId == nil || busy)
         }
         .onChange(of: kind) { _, k in
-            if k == .scan { inputId = env?.recordings.first?.rec.id } else { inputId = scans.first?.asset.id }
+            if k == .scan { inputId = env?.videoRecordings.first?.rec.id } else { inputId = scans.first?.asset.id }
         }
         .task {
-            if inputId == nil { inputId = kind == .scan ? env?.recordings.first?.rec.id : scans.first?.asset.id }
+            if inputId == nil { inputId = kind == .scan ? env?.videoRecordings.first?.rec.id : scans.first?.asset.id }
+            chosenMeasurements = Set((env?.measurementRecordings ?? []).map(\.rec.id))
         }
     }
 
@@ -255,7 +333,8 @@ struct NewRunSheet: View {
         guard let inputId else { return }
         busy = true
         Task {
-            let ok = await ws.createRun(env: request.envId, kind: kind, inputId: inputId, settings: settings, label: label)
+            let ok = await ws.createRun(env: request.envId, kind: kind, inputId: inputId, recordings: kind == .layout ? Array(chosenMeasurements).sorted() : [],
+                                        settings: settings, label: label)
             busy = false
             if ok { dismiss() }
         }

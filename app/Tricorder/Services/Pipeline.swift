@@ -73,9 +73,16 @@ enum Pipeline {
         return id
     }
 
-    /// Create a run and start it detached.
-    static func createRun(root: URL, envId: String, kind: RunKind, inputId: String, settings: RunSettings, label: String) async throws -> String {
-        let input = kind == .scan ? ["--recording", inputId] : ["--asset", inputId]
+    static func createMeasurements(root: URL, envId: String, name: String) async throws -> String {
+        let out = try await run(root: root, ["new-measurements", envId, "--name", name])
+        guard let id = ids(out)["recording"] else { throw PipelineError("no recording id returned") }
+        return id
+    }
+
+    /// Create a run and start it detached. `recordings` are the measurement recordings of a layout.
+    static func createRun(root: URL, envId: String, kind: RunKind, inputId: String, recordings: [String] = [], settings: RunSettings, label: String) async throws -> String {
+        var input = kind == .scan ? ["--recording", inputId] : ["--asset", inputId]
+        if kind == .layout, !recordings.isEmpty { input += ["--recordings"] + recordings }
         let out = try await run(root: root, ["new-run", envId, kind.rawValue] + input + settingsArgs(settings, label: label))
         guard let id = ids(out)["run"] else { throw PipelineError("no run id returned") }
         try await start(root: root, envId: envId, runId: id)

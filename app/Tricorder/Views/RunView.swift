@@ -75,7 +75,7 @@ struct RunView: View {
     private var flow: some View {
         Card("") {
             HStack(spacing: 14) {
-                flowNode(symbol: run.kind == .scan ? "video" : "cube.transparent", title: run.kind == .scan ? "Recording" : "3D model",
+                flowNode(symbol: run.kind == .scan ? "video" : "cube.transparent", title: run.kind == .scan ? "Recording" : "3D model + measurements",
                          name: env.inputName(of: run)) {
                     if let r = inputRecording { ws.open(.recording(env.id, r.rec.id)) }
                     else if let a = inputAsset { ws.open(.asset(env.id, a.asset.id)) }

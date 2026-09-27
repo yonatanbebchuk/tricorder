@@ -112,20 +112,45 @@ struct EnvironmentInfo: Decodable, Sendable, Hashable, Identifiable {
 
 // MARK: - recording
 
+/// One thing you taped on site: two pixels on a frame of a video recording, and the metres between them.
+struct MeasurementItem: Codable, Sendable, Hashable, Identifiable {
+    var id: String
+    var recording: String          // the video recording the frame belongs to
+    var frame: String              // image file name, e.g. f002240.jpg
+    var a: [Double]                // pixel (u, v) on the original frame
+    var b: [Double]
+    var meters: Double
+    var note: String?
+    var imageSize: [Int]?
+    var at: String?
+
+    enum CodingKeys: String, CodingKey { case id, recording, frame, a, b, meters, note, at, imageSize = "image_size" }
+}
+
+struct MeasurementNorth: Codable, Sendable, Hashable {
+    var recording: String
+    var frame: String
+    var bearing: Double
+}
+
 struct Recording: Decodable, Sendable, Hashable, Identifiable {
     var id: String
     var envId: String
     var name: String
     var createdAt: String
-    var kind: String
+    var kind: String               // video | measurements
     var source: VideoInfo
     var frames: Stage
     var frameSettings: FrameSettings
     var notes: String
     var thumbnail: String?
+    var items: [MeasurementItem]
+    var north: MeasurementNorth?
+
+    var isMeasurements: Bool { kind == "measurements" }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, kind, source, frames, notes, thumbnail
+        case id, name, kind, source, frames, notes, thumbnail, items, north
         case envId = "env_id", createdAt = "created_at", frameSettings = "frame_settings"
     }
 
@@ -141,6 +166,8 @@ struct Recording: Decodable, Sendable, Hashable, Identifiable {
         frameSettings = try c.decodeIfPresent(FrameSettings.self, forKey: .frameSettings) ?? FrameSettings()
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         thumbnail = try c.decodeIfPresent(String.self, forKey: .thumbnail)
+        items = try c.decodeIfPresent([MeasurementItem].self, forKey: .items) ?? []
+        north = try c.decodeIfPresent(MeasurementNorth.self, forKey: .north)
     }
 }
 
@@ -206,7 +233,7 @@ struct Run: Decodable, Sendable, Hashable, Identifiable {
     var id: String
     var envId: String
     var kind: RunKind
-    var inputs: [String: String]
+    var inputs: [String: JSONValue]
     var createdAt: String
     var settings: RunSettings
     var status: Status
@@ -228,7 +255,7 @@ struct Run: Decodable, Sendable, Hashable, Identifiable {
         id = try c.decode(String.self, forKey: .id)
         envId = try c.decodeIfPresent(String.self, forKey: .envId) ?? ""
         kind = try c.decode(RunKind.self, forKey: .kind)
-        inputs = try c.decodeIfPresent([String: String].self, forKey: .inputs) ?? [:]
+        inputs = try c.decodeIfPresent([String: JSONValue].self, forKey: .inputs) ?? [:]
         createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt) ?? ""
         settings = try c.decodeIfPresent(RunSettings.self, forKey: .settings) ?? RunSettings()
         status = try c.decodeIfPresent(Status.self, forKey: .status) ?? .queued
@@ -242,10 +269,15 @@ struct Run: Decodable, Sendable, Hashable, Identifiable {
     }
 
     func stage(_ key: String) -> Stage { stages[key] ?? Stage() }
-    /// The recording (reconstruct) or asset (plan) id this run consumed.
-    var inputId: String { inputs["recording"] ?? inputs["asset"] ?? "" }
-    var inputRecordingId: String? { inputs["recording"] }
-    var inputAssetId: String? { inputs["asset"] }
+    var inputRecordingId: String? { inputs["recording"]?.string }
+    var inputAssetId: String? { inputs["asset"]?.string }
+    /// Every recording this run consumed: the video of a scan, the measurement recordings of a layout.
+    var inputRecordingIds: [String] {
+        var ids: [String] = []
+        if let r = inputRecordingId { ids.append(r) }
+        if case .array(let a)? = inputs["recordings"] { ids += a.compactMap(\.string) }
+        return ids
+    }
 }
 
 // MARK: - asset
@@ -434,10 +466,11 @@ struct Transform: Decodable, Sendable, Hashable {
     var ground: JSONValue?
     var north: JSONValue?
     var warning: Bool?
+    var estimated: Bool?
     var spreadPct: Double?
     var residuals: [Residual] = []
 
-    enum CodingKeys: String, CodingKey { case scale, ground, north, warning, residuals, spreadPct = "spread_pct" }
+    enum CodingKeys: String, CodingKey { case scale, ground, north, warning, estimated, residuals, spreadPct = "spread_pct" }
 
     init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -445,6 +478,7 @@ struct Transform: Decodable, Sendable, Hashable {
         ground = try c.decodeIfPresent(JSONValue.self, forKey: .ground)
         north = try c.decodeIfPresent(JSONValue.self, forKey: .north)
         warning = try c.decodeIfPresent(JSONValue.self, forKey: .warning)?.bool
+        estimated = try c.decodeIfPresent(JSONValue.self, forKey: .estimated)?.bool
         spreadPct = try c.decodeIfPresent(Double.self, forKey: .spreadPct)
         residuals = try c.decodeIfPresent([Residual].self, forKey: .residuals) ?? []
     }

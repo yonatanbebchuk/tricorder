@@ -51,6 +51,25 @@ struct Card<Content: View>: View {
     }
 }
 
+struct SourceBadge: View {
+    let source: String
+    var body: some View {
+        Text(source).font(.caption2).fontWeight(.medium)
+            .padding(.horizontal, 6).padding(.vertical, 1.5)
+            .background(.quaternary, in: Capsule()).foregroundStyle(.secondary)
+    }
+}
+
+/// Pixel size of an image file without decoding it.
+enum ImageInfo {
+    nonisolated static func pixelSize(_ url: URL) -> CGSize? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int else { return nil }
+        return CGSize(width: w, height: h)
+    }
+}
+
 struct MetricTile: View {
     let value: String
     let label: String

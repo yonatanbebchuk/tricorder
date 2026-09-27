@@ -152,6 +152,24 @@ enum ManifestStore {
         try enc.encode(c).write(to: file, options: .atomic)
     }
 
+    /// Write a measurement recording's items and north bearing back into its manifest.
+    static func saveMeasurements(recordingDir: URL, items: [MeasurementItem], north: MeasurementNorth?) throws {
+        let enc = JSONEncoder()
+        let itemsObj = try JSONSerialization.jsonObject(with: enc.encode(items))
+        let northObj: Any = try north.map { try JSONSerialization.jsonObject(with: enc.encode($0)) } ?? NSNull()
+        try patchJSON(at: recordingDir.appending(path: "recording.json")) { obj in
+            obj["items"] = itemsObj
+            obj["north"] = northObj
+        }
+    }
+
+    /// The frames of a video recording, in walk order.
+    static func frames(of recordingDir: URL) -> [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: recordingDir.appending(path: "images").path)) ?? [])
+            .filter { $0.lowercased().hasSuffix(".jpg") }
+            .sorted()
+    }
+
     static func trash(_ url: URL) throws {
         try FileManager.default.trashItem(at: url, resultingItemURL: nil)
     }

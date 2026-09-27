@@ -3,7 +3,7 @@ import ScreenCaptureKit
 import SwiftUI
 
 /// Development-only hooks, all driven by environment variables so a normal launch is unaffected:
-///   TRICORDER_SELECT=<env>[/recordings|/runs|/assets|/recording/<id>|/run/<id>|/asset/<id>]   navigate once loaded
+///   TRICORDER_SELECT=<env>[/recordings|/runs|/assets|/recording/<id>|/run/<id>|/asset/<id>|/new-measurements|/new-run]
 ///   TRICORDER_SMOKE=1                run `pipeline list` through the app's Process wrapper and print the result
 ///   TRICORDER_RENDER=<file.png>      after ~3 s, render the current page with ImageRenderer (AppKit-backed parts stay blank)
 ///   TRICORDER_WINDOW=1440x900        size the main window (for consistent screenshots)
@@ -49,6 +49,8 @@ enum DebugHooks {
                     case "recordings": ws.select(.recordings(p[0]))
                     case "runs": ws.select(.runs(p[0]))
                     case "assets": ws.select(.assets(p[0]))
+                    case "new-measurements": ws.select(.environment(p[0])); ws.requestNewRecording(env: p[0], measurements: true)
+                    case "new-run": ws.select(.environment(p[0])); ws.requestNewRun(env: p[0], kind: .layout)
                     default: ws.select(.environment(p[0]))
                     }
                 case 3:
@@ -93,18 +95,24 @@ enum DebugHooks {
         }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-            let mine = content.windows.filter { $0.owningApplication?.processID == getpid() }
-            guard let w = mine.first(where: { $0.windowID == CGWindowID(window.windowNumber) }) ?? mine.first else {
+            let mine = content.windows.filter { $0.owningApplication?.processID == getpid() && $0.frame.width > 10 }
+            guard let w = mine.first(where: { $0.windowID == CGWindowID(window.windowNumber) }) ?? mine.first,
+                  let display = content.displays.first(where: { $0.frame.contains(CGPoint(x: w.frame.midX, y: w.frame.midY)) }) ?? content.displays.first else {
                 FileHandle.standardError.write(Data("screenshot: window not shareable (\(content.windows.count) windows visible, \(mine.count) mine)\n".utf8)); return
             }
+            // capture every window of ours on that display (sheets are separate windows), then crop to the main one
             let cfg = SCStreamConfiguration()
             let scale = window.backingScaleFactor
-            cfg.width = Int(w.frame.width * scale)
-            cfg.height = Int(w.frame.height * scale)
+            cfg.width = Int(display.frame.width * scale)
+            cfg.height = Int(display.frame.height * scale)
             cfg.showsCursor = false
             cfg.captureResolution = .best
-            let image = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(desktopIndependentWindow: w), configuration: cfg)
-            if let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) { try png.write(to: url) }
+            let image = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: display, including: mine), configuration: cfg)
+            let sx = CGFloat(image.width) / display.frame.width, sy = CGFloat(image.height) / display.frame.height
+            let crop = CGRect(x: (w.frame.minX - display.frame.minX) * sx, y: (w.frame.minY - display.frame.minY) * sy,
+                              width: w.frame.width * sx, height: w.frame.height * sy)
+            let final = image.cropping(to: crop) ?? image
+            if let png = NSBitmapImageRep(cgImage: final).representation(using: .png, properties: [:]) { try png.write(to: url) }
         } catch {
             FileHandle.standardError.write(Data("screenshot failed: \(error)\n".utf8))
         }

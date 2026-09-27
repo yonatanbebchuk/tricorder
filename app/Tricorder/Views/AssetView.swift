@@ -6,7 +6,6 @@ struct AssetView: View {
     let record: AssetRecord
 
     @State private var confirmDelete = false
-    @State private var startingPlan = false
 
     private var asset: Asset { record.asset }
     private var producer: RunRecord? { env.run(asset.runId) }
@@ -26,9 +25,9 @@ struct AssetView: View {
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
                     if asset.kind == .model3d {
-                        Button("Lay Out Site Plan", systemImage: "map") { makePlan() }
-                            .disabled(record.answeredCount == 0 || planRunning || startingPlan)
-                            .help(record.answeredCount == 0 ? "Enter at least one measurement first" : "Solve scale, level and north; orthomosaic, contours, DXF and PDF")
+                        Button("Lay Out Site Plan", systemImage: "map") { ws.requestNewRun(env: env.id, kind: .layout, inputId: asset.id) }
+                            .disabled(planRunning)
+                            .help("Choose the measurement recordings, then solve scale, level and north; orthomosaic, contours, DXF and PDF")
                     }
                     if asset.kind == .sitePlan {
                         if record.has("site_plan.dxf") { Button("Open DXF", systemImage: "pencil.and.ruler") { ws.openFile(record.url("site_plan.dxf")) }.help("Open the CAD drawing (QCAD, AutoCAD, …)") }
@@ -52,23 +51,12 @@ struct AssetView: View {
             }
     }
 
-    private func makePlan() {
-        startingPlan = true
-        Task {
-            var s = RunSettings()
-            if let p = producer { s = p.run.settings }
-            _ = await ws.createRun(env: env.id, kind: .layout, inputId: asset.id, settings: s, label: "")
-            startingPlan = false
-        }
-    }
-
     var pageContent: some View {
         VStack(alignment: .leading, spacing: 22) {
             header
             if asset.kind == .sitePlan, let o = record.overlay { SitePlanView(record: record, overlay: o) } else { viewer }
             tiles
             if asset.kind == .model3d {
-                if record.prompts != nil { MeasurePanel(record: record) }
                 planAction
                 if !derivedPlans.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
@@ -157,19 +145,26 @@ struct AssetView: View {
     }
 
     private var planAction: some View {
-        Card("") {
+        let measurements = env.measurementRecordings
+        let count = measurements.reduce(0) { $0 + $1.rec.items.count }
+        return Card("") {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Layout").font(.headline)
-                    Text(record.answeredCount == 0
-                         ? "Enter at least one tape measurement above, then lay out the site plan: scale, level and north are solved from the measurements, then the orthomosaic, contour lines, DXF drawing and PDF sheet are produced."
-                         : "\(record.answeredCount) measurement\(record.answeredCount == 1 ? "" : "s") entered. A layout publishes a new site-plan asset; earlier plans stay in the history.")
+                    Text(measurements.isEmpty
+                         ? "A layout turns this model into a site plan. Add a measurements recording first (two points on a frame plus the taped metres) for true scale; without one the scale is estimated from the camera height (about ±10 %)."
+                         : "\(count) tape measurement\(count == 1 ? "" : "s") in \(measurements.count) recording\(measurements.count == 1 ? "" : "s") available. A layout publishes a new site-plan asset; earlier plans stay in the history.")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(planRunning || startingPlan ? "Working…" : derivedPlans.isEmpty ? "Lay Out Site Plan" : "Lay Out Again", systemImage: "map") { makePlan() }
-                    .buttonStyle(.glassProminent)
-                    .disabled(record.answeredCount == 0 || planRunning || startingPlan || !record.hasTexturedMesh)
+                if measurements.isEmpty {
+                    Button("Add Measurements…", systemImage: "ruler") { ws.requestNewRecording(env: env.id, measurements: true) }.buttonStyle(.glass)
+                }
+                Button(planRunning ? "Working…" : derivedPlans.isEmpty ? "Lay Out Site Plan…" : "Lay Out Again…", systemImage: "map") {
+                    ws.requestNewRun(env: env.id, kind: .layout, inputId: asset.id)
+                }
+                .buttonStyle(.glassProminent)
+                .disabled(planRunning || !record.hasTexturedMesh)
             }
         }
     }
@@ -182,8 +177,10 @@ struct ScaleResultView: View {
         Card("Scale, level, north") {
             Text("scale \(String(format: "%.4f", transform.scale)) m per model unit · level from \(transform.ground?.description ?? "–") · north: \(transform.north?.description ?? "–")")
                 .foregroundStyle(.secondary)
-            if transform.warning == true {
-                WarningBanner(text: "Measurements disagree by more than 3%; re-check them and make the plan again.")
+            if transform.estimated == true {
+                WarningBanner(text: "Scale was ESTIMATED from the camera height (no measurement recording was used): expect about ±10 %. Add a measurements recording and lay out again for true scale.")
+            } else if transform.warning == true {
+                WarningBanner(text: "Measurements disagree by more than 3%; re-check them and lay out again.")
             }
             if !transform.residuals.isEmpty {
                 Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 4) {

@@ -88,10 +88,18 @@ feature matching for the old frames.
 
 ## 3. Layout (3D model + measurements → site plan)
 
-### 3.1 Measurements: three ways to say how big things are
+### 3.1 Measurements are recordings
 
-All of them produce the same thing: a **distance constraint** `{a: xyz, b: xyz, meters, source, note}` with both
-points in the mesh's coordinate frame. The solver does not care where a constraint came from.
+Decided 2026-09-27 (user): a tape measurement is sensed data about the place, so it is a **recording** of kind
+`measurements`, not a property of one model. Each item is *two pixels on a frame of a video recording + the metres
+taped between them* (+ note); a recording may also hold a compass bearing read at a frame. Any layout can take any
+measurement recordings, on any model built from that footage; sets can be compared across layouts. Implemented:
+`MeasurementsEditor` in the app (frame strip, point picker), `scripts/measure_project.py` at solve time (pycolmap
+undistortion with the scan's OPENCV camera, ray cast onto the model mesh with Open3D), `constraints.json` in the run.
+Items whose frame the model did not register are reported and skipped. With no measurement recording the scale is
+estimated from the camera height above the ground plane (1.5 m, about ±10 %) and `transform.json` says `estimated`.
+
+The older ideas, kept for reference: all produce the same **distance constraint** `{a: xyz, b: xyz, meters, source}`.
 
 1. **Prompted** (*today*). After a scan, `pick_landmarks.py` chooses long, well-triangulated spans between
    structural corners and shows the two points as crops of the frames. You tape-measure them on site and type the

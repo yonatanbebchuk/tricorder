@@ -44,9 +44,9 @@ def main() -> int:
     ppath = work / "measure" / "prompts.json"
     prompts = json.load(open(ppath)) if ppath.exists() else {}
     by_id = {p["id"]: p for p in prompts.get("prompts", [])}
-    up_hint = np.array(prompts.get("up", [0, 0, 1]), dtype=float)
+    up_hint = np.array(c.get("up") or prompts.get("up", [0, 0, 1]), dtype=float)
 
-    # 1. scale
+    # 1. scale from the distance constraints
     factors, residuals = [], []
     for d in c.get("distances", []):
         try:
@@ -61,16 +61,21 @@ def main() -> int:
         kind = by_id.get(d.get("prompt_id", ""), {}).get("kind", d.get("source", "distance"))
         residuals.append({"id": d.get("id", f"m{len(residuals) + 1}"), "source": d.get("source", "prompt"), "kind": kind,
                           "meters": m, "model_dist": model, "factor": f})
-    if not factors:
-        sys.exit("no distance constraints yet; enter at least one measurement")
-    scale = float(np.mean(factors))
-    for r in residuals:
-        r["residual_cm"] = (r["factor"] / scale - 1) * r["meters"] * 100
-    spread = (max(factors) / min(factors) - 1) * 100 if len(factors) > 1 else 0.0
-    print(f"scale = {scale:.5f} m/unit from {len(factors)} constraint(s); spread {spread:.1f}%")
-    for r in residuals:
-        print(f"  {r['id']} {r['kind']:9s} {r['source']:8s} {r['meters']:6.2f} m  -> {r['residual_cm']:+.1f} cm vs mean")
-    warn = spread > 3.0
+    estimated = False
+    if factors:
+        scale = float(np.mean(factors))
+        for r in residuals:
+            r["residual_cm"] = (r["factor"] / scale - 1) * r["meters"] * 100
+        spread = (max(factors) / min(factors) - 1) * 100 if len(factors) > 1 else 0.0
+        print(f"scale = {scale:.5f} m/unit from {len(factors)} constraint(s); spread {spread:.1f}%")
+        for r in residuals:
+            print(f"  {r['id']} {r['kind']:9s} {r['source']:8s} {r['meters']:6.2f} m  -> {r['residual_cm']:+.1f} cm vs mean")
+        warn = spread > 3.0
+    elif c.get("cameras"):
+        estimated, warn, spread, scale = True, True, 0.0, None      # decided after the ground plane is known
+        print("no distance constraints: scale will be ESTIMATED from the camera height above the ground (phone at chest height)")
+    else:
+        sys.exit("no distance constraints yet; add a measurement recording to the layout")
 
     # 2. level
     ground_src = "auto"
@@ -96,6 +101,12 @@ def main() -> int:
         centroid = np.asarray(pcd_ds.points)[np.asarray(inl)].mean(axis=0)
     R = scale04.rotation_to_z(n)
     print(f"level: ground from {ground_src}, tilt vs camera-up {np.degrees(np.arccos(min(abs(np.dot(n, up_hint)), 1))):.1f} deg")
+    if estimated:
+        CAMERA_HEIGHT_M = 1.5
+        heights = np.array([np.dot(np.array(C) - centroid, n) for C in c["cameras"]])
+        h = float(np.median(heights[heights > 0])) if np.any(heights > 0) else float(np.median(np.abs(heights)))
+        scale = CAMERA_HEIGHT_M / h
+        print(f"estimated scale = {scale:.5f} m/unit (median camera height {h:.3f} model units taken as {CAMERA_HEIGHT_M} m; expect ±10%)")
 
     # 3. north
     north_src = "none"
@@ -114,8 +125,9 @@ def main() -> int:
     T[:3, :3] = scale * (Rz @ R)
     T[:3, 3] = -(T[:3, :3] @ centroid)
     json.dump({"scale": scale, "matrix": T.tolist(), "residuals": residuals, "spread_pct": spread, "warning": warn,
-               "ground": ground_src, "north": north_src, "constraints": len(factors)}, open(work / args.out, "w"), indent=2)
-    print(f"wrote {work / args.out}" + ("   WARNING: measurements disagree by >3%; re-check them" if warn else ""))
+               "estimated": estimated, "ground": ground_src, "north": north_src, "constraints": len(factors)},
+              open(work / args.out, "w"), indent=2)
+    print(f"wrote {work / args.out}" + ("   WARNING: measurements disagree by >3%; re-check them" if warn and not estimated else ""))
     return 0
 
 

@@ -294,12 +294,15 @@ def stage_ortho(run: Run) -> None:
 
 
 def stage_trace(run: Run) -> None:
-    """Straight, merged, snapped line segments for walls, fences and edges: the architect's line drawing."""
+    """The architect's line drawing: vertical structure in the cloud → wall lines; the ground's footprint →
+    the regularised, dimensioned boundary polygon snapped onto those walls."""
     def fn(log: Path) -> dict:
-        _check(_exec([PY, str(SCRIPTS / "09_trace_lines.py"), str(run.dir), "--wall", str(run.settings.wall_jump_m),
-                      "--edge", str(run.settings.edge_jump_m)], log), "line tracing")
+        _check(_exec([PY, str(SCRIPTS / "10_trace_walls.py"), str(run.dir), "--min-height", str(run.settings.wall_jump_m),
+                      "--min-edge", str(run.settings.min_edge_m)], log), "line tracing")
         lw = json.load(open(run.dir / "linework.json"))
-        return {"walls": len(lw.get("walls", [])), "edges": len(lw.get("edges", [])), "axis_deg": lw.get("axis_deg")}
+        polys = lw.get("polygons", [])
+        return {"walls": len(lw.get("walls", [])), "polygons": len(polys), "axis_deg": lw.get("axis_deg"),
+                "boundary_sides": len(polys[0]["points"]) if polys else 0, "boundary_area_m2": polys[0]["area"] if polys else None}
     _stage(run, "trace", fn)
 
 
@@ -459,7 +462,7 @@ def launch(args: list[str]) -> subprocess.Popen:
 def _settings_from(a) -> RunSettings:
     return RunSettings(res_level=a.res_level, features=a.features, matcher=a.matcher, matching=a.matching,
                        measures=a.measures, max_faces=a.max_faces, px_per_m=a.px_per_m, contour_m=a.contour, sheet_scale=a.sheet_scale,
-                       wall_jump_m=a.wall, edge_jump_m=a.edge, preview_faces=a.preview_faces)
+                       wall_jump_m=a.wall, edge_jump_m=a.edge, min_edge_m=a.min_edge, preview_faces=a.preview_faces)
 
 
 def main(argv=None) -> int:
@@ -482,7 +485,8 @@ def main(argv=None) -> int:
         p.add_argument("--contour", type=float, default=0.25)
         p.add_argument("--sheet-scale", type=int, default=100)
         p.add_argument("--wall", type=float, default=0.5, help="linework: height step of a wall/fence (m)")
-        p.add_argument("--edge", type=float, default=0.08, help="linework: height step of an edge/curb (m)")
+        p.add_argument("--edge", type=float, default=0.08, help="(reserved) height step of an edge/curb (m)")
+        p.add_argument("--min-edge", type=float, default=1.2, help="linework: boundary jogs shorter than this are absorbed (m)")
         p.add_argument("--preview-faces", type=int, default=300_000)
         p.add_argument("--label", default="")
         p.add_argument("--start", action="store_true", help="run the pipeline now (in this process)")

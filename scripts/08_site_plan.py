@@ -128,7 +128,8 @@ def write_dxf(path: Path, ortho: dict, cont, foot, meas, title: str, sub: str, l
     doc = ezdxf.new("R2010", setup=True)
     doc.header["$INSUNITS"] = 6                             # metres
     for name, color in (("ORTHO", 8), ("GRID", 253), ("GRID_MAJOR", 251), ("CONTOURS", 32), ("CONTOURS_INDEX", 30),
-                        ("FOOTPRINT", 4), ("WALLS", 7), ("EDGES", 8), ("MEASURE", 1), ("NORTH", 7), ("SCALEBAR", 7), ("TITLE", 7)):
+                        ("FOOTPRINT", 4), ("WALLS", 7), ("EDGES", 8), ("BOUNDARY", 7), ("ENCLOSURES", 7), ("DIMENSIONS", 3),
+                        ("MEASURE", 1), ("NORTH", 7), ("SCALEBAR", 7), ("TITLE", 7)):
         doc.layers.add(name, color=color)
     msp = doc.modelspace()
     x0, y1, w, h = ortho["x_min"], ortho["y_max"], ortho["width_m"], ortho["height_m"]
@@ -157,6 +158,16 @@ def write_dxf(path: Path, ortho: dict, cont, foot, meas, title: str, sub: str, l
         msp.add_lwpolyline(seg, dxfattribs={"layer": "WALLS", "const_width": 0.05})
     for seg in (linework or {}).get("edges", []):
         msp.add_lwpolyline(seg, dxfattribs={"layer": "EDGES"})
+    for k, poly in enumerate((linework or {}).get("polygons", [])):
+        pts = poly["points"]
+        msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": "BOUNDARY" if k == 0 else "ENCLOSURES", "const_width": 0.08 if k == 0 else 0.04})
+        for i, L in enumerate(poly["lengths"]):
+            if L < 0.5:
+                continue
+            p1, p2 = pts[i], pts[(i + 1) % len(pts)]
+            dim = msp.add_aligned_dim(p1=tuple(p1), p2=tuple(p2), distance=-0.6 if k == 0 else 0.35, text=f"{L:.2f} m",
+                                      dxfattribs={"layer": "DIMENSIONS"})
+            dim.render()
     for m in meas:
         dim = msp.add_aligned_dim(p1=tuple(m["a"]), p2=tuple(m["b"]), distance=0.4, text=f"{m['meters']:.2f} m",
                                   dxfattribs={"layer": "MEASURE"})
@@ -244,6 +255,20 @@ def draw_page(fig, ax, page, ortho_png, ortho, cont, foot, meas, linework, title
         ax.plot([seg[0][0], seg[1][0]], [seg[0][1], seg[1][1]], color="black", lw=1.6 if page == "lines" else 1.1, solid_capstyle="round", zorder=3)
     for seg in (linework or {}).get("edges", []):
         ax.plot([seg[0][0], seg[1][0]], [seg[0][1], seg[1][1]], color="#333333" if page == "lines" else "#555555", lw=0.6, zorder=3)
+    for k, poly in enumerate((linework or {}).get("polygons", [])):
+        P = np.array(poly["points"] + [poly["points"][0]])
+        ax.plot(P[:, 0], P[:, 1], color="black", lw=2.0 if k == 0 else 0.9, solid_joinstyle="miter", zorder=4)
+        if page == "lines":
+            for i, L in enumerate(poly["lengths"]):
+                if L < 0.5:
+                    continue
+                a, b = P[i], P[i + 1]
+                d = b - a; n = np.array([d[1], -d[0]]) / max(np.linalg.norm(d), 1e-9)
+                mid = (a + b) / 2 + n * (0.45 if k == 0 else -0.3)       # outside the boundary, inside enclosures
+                ang = np.degrees(np.arctan2(d[1], d[0]))
+                if ang > 90 or ang < -90: ang += 180
+                ax.text(mid[0], mid[1], f"{L:.2f}", fontsize=6.5, rotation=ang, ha="center", va="center", color="black",
+                        bbox=dict(boxstyle="round,pad=0.12", fc="white", ec="none", alpha=0.9), zorder=5)
     for m in meas:
         (ax_, ay_), (bx_, by_) = m["a"], m["b"]
         ax.plot([ax_, bx_], [ay_, by_], color="#d97757", lw=1.0, zorder=4)
@@ -301,10 +326,17 @@ def main() -> int:
     linework = json.load(open(lw_path)) if lw_path.exists() else None
     write_dxf(work / "site_plan.dxf", ortho, cont, foot, meas, a.title, sub, linework)
     scale = write_pdf(work / "site_plan.pdf", work / "orthomosaic.png", ortho, cont, foot, meas, a.title, sub, a.scale, linework)
+    polys = (linework or {}).get("polygons", [])
+    align = 0.0
+    if polys:                                             # the longest boundary side becomes horizontal in the app's default view
+        pts, lengths = polys[0]["points"], polys[0]["lengths"]
+        i = int(np.argmax(lengths)); p1, p2 = np.array(pts[i]), np.array(pts[(i + 1) % len(pts)])
+        align = float(np.degrees(np.arctan2(p2[1] - p1[1], p2[0] - p1[0])))
     json.dump({"px_per_m": ppm, "x_min": ortho["x_min"], "y_max": ortho["y_max"], "width_px": ortho["width_px"], "height_px": ortho["height_px"],
                "width_m": ortho["width_m"], "height_m": ortho["height_m"], "contour_interval": a.contour, "sheet_scale": scale,
                "contours": cont, "footprint": foot, "measurements": meas,
-               "walls": (linework or {}).get("walls", []), "edges": (linework or {}).get("edges", [])}, open(work / "overlay.json", "w"))
+               "walls": (linework or {}).get("walls", []), "edges": (linework or {}).get("edges", []),
+               "polygons": polys, "axis_deg": (linework or {}).get("axis_deg"), "align_deg": align}, open(work / "overlay.json", "w"))
     print(f"site plan: {len(cont)} contour lines every {a.contour} m, {len(foot)} footprint polygon(s), {len(meas)} measurements, "
           f"DEM {meta['width']}x{meta['height']} @ {a.cell} m, sheet 1:{scale}")
     return 0

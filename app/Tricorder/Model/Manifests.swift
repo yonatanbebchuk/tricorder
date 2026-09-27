@@ -223,6 +223,7 @@ struct RunSettings: Decodable, Sendable, Hashable {
     var sheetScale: Int = 100
     var wallJumpM: Double = 0.5
     var edgeJumpM: Double = 0.08
+    var minEdgeM: Double = 1.2
     var previewFaces: Int = 300_000
 
     init() {}
@@ -230,7 +231,7 @@ struct RunSettings: Decodable, Sendable, Hashable {
     enum CodingKeys: String, CodingKey {
         case features, matcher, matching, relaxed, measures
         case resLevel = "res_level", maxFaces = "max_faces", pxPerM = "px_per_m", contourM = "contour_m", sheetScale = "sheet_scale"
-        case wallJumpM = "wall_jump_m", edgeJumpM = "edge_jump_m", previewFaces = "preview_faces"
+        case wallJumpM = "wall_jump_m", edgeJumpM = "edge_jump_m", minEdgeM = "min_edge_m", previewFaces = "preview_faces"
     }
 
     init(from decoder: any Decoder) throws {
@@ -247,6 +248,7 @@ struct RunSettings: Decodable, Sendable, Hashable {
         sheetScale = try c.decodeIfPresent(Int.self, forKey: .sheetScale) ?? 100
         wallJumpM = try c.decodeIfPresent(Double.self, forKey: .wallJumpM) ?? 0.5
         edgeJumpM = try c.decodeIfPresent(Double.self, forKey: .edgeJumpM) ?? 0.08
+        minEdgeM = try c.decodeIfPresent(Double.self, forKey: .minEdgeM) ?? 1.2
         previewFaces = try c.decodeIfPresent(Int.self, forKey: .previewFaces) ?? 300_000
     }
 }
@@ -453,6 +455,7 @@ struct Constraints: Codable, Sendable, Hashable {
 struct PlanOverlay: Decodable, Sendable, Hashable {
     struct Contour: Decodable, Sendable, Hashable { var level: Double; var index: Bool; var points: [[Double]] }
     struct Measurement: Decodable, Sendable, Hashable { var id: String; var source: String; var meters: Double; var a: [Double]; var b: [Double] }
+    struct Polygon: Decodable, Sendable, Hashable { var points: [[Double]]; var lengths: [Double]; var area: Double }
     var pxPerM: Double
     var xMin: Double
     var yMax: Double
@@ -467,9 +470,13 @@ struct PlanOverlay: Decodable, Sendable, Hashable {
     var measurements: [Measurement]
     var walls: [[[Double]]]?
     var edges: [[[Double]]]?
+    var polygons: [Polygon]?
+    var axisDeg: Double?
+    var alignDeg: Double?
 
     enum CodingKeys: String, CodingKey {
-        case contours, footprint, measurements, walls, edges
+        case contours, footprint, measurements, walls, edges, polygons
+        case axisDeg = "axis_deg", alignDeg = "align_deg"
         case pxPerM = "px_per_m", xMin = "x_min", yMax = "y_max", widthPx = "width_px", heightPx = "height_px"
         case widthM = "width_m", heightM = "height_m", contourInterval = "contour_interval", sheetScale = "sheet_scale"
     }

@@ -54,15 +54,15 @@ struct LayoutSettingsForm: View {
             Text("1:100").tag(100)
             Text("1:200").tag(200)
         }
-        Picker("Trace walls above", selection: $settings.wallJumpM) {
-            Text("0.3 m step").tag(0.3)
-            Text("0.5 m step").tag(0.5)
-            Text("0.8 m step").tag(0.8)
+        Picker("Walls and fences at least", selection: $settings.wallJumpM) {
+            Text("0.3 m tall").tag(0.3)
+            Text("0.5 m tall").tag(0.5)
+            Text("0.8 m tall").tag(0.8)
         }
-        Picker("Trace edges above", selection: $settings.edgeJumpM) {
-            Text("0.05 m step").tag(0.05)
-            Text("0.08 m step").tag(0.08)
-            Text("0.15 m step").tag(0.15)
+        Picker("Absorb boundary jogs under", selection: $settings.minEdgeM) {
+            Text("0.8 m").tag(0.8)
+            Text("1.2 m").tag(1.2)
+            Text("2.0 m").tag(2.0)
         }
         Picker("3D preview detail", selection: $settings.previewFaces) {
             Text("150k faces").tag(150_000)

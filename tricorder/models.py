@@ -245,8 +245,9 @@ class RunSettings:
     max_faces: int = 4_000_000
     px_per_m: int = 50               # orthomosaic resolution
     contour_m: float = 0.25          # contour interval
-    wall_jump_m: float = 0.5         # linework: height step that counts as a wall or fence
-    edge_jump_m: float = 0.08        # linework: height step that counts as an edge or curb
+    wall_jump_m: float = 0.5         # linework: how tall a vertical surface must be to count as a wall or fence
+    edge_jump_m: float = 0.08        # (reserved) height step that counts as an edge or curb
+    min_edge_m: float = 1.2          # linework: boundary jogs shorter than this are absorbed
     sheet_scale: int = 100           # wanted PDF sheet scale 1:N
     preview_faces: int = 300_000     # decimation target for the in-app 3D preview
 

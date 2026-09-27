@@ -134,3 +134,98 @@ the residual, so the drawing carries the ground truth the user collected.
 - buildingregulariser: https://github.com/DPIRD-DMA/Building-Regulariser · orthogonalize-polygon: https://github.com/Mashin6/orthogonalize-polygon · QGIS plugin: https://github.com/s1m0nS/QGIS-Regularize-Building-Footprints
 - pyRANSAC-3D: https://github.com/leomariga/pyRANSAC-3D · CGAL Shape Detection: https://doc.cgal.org/latest/Shape_detection/index.html
 - PC2WF / LC2WF (wireframes from point/line clouds): https://arxiv.org/abs/2103.02766 · https://arxiv.org/abs/2208.11948
+
+
+---
+
+# Part 2: elements and materials (doors, stairs, windows; sand, brick, grass, garden)
+
+Research notes, 2026-09-27, second round. The site plan now has straight fences and a dimensioned boundary; what it
+lacks is everything an architect *reads* on a plan: the stair symbol with rise and run, the door leaf and swing, the
+gate, the bay window's jog, and the ground materials as hatched zones.
+
+## What is in the data
+
+Two things, and both are needed:
+
+- **Geometry** (the point cloud, in metres, levelled): stairs are horizontal planes at regular rises; a bay window is
+  a jog in the vertical structure; a door is a gap in a wall's density; a fence is a thin vertical plane. Geometry
+  gives *exact positions and sizes* but does not know what anything is called.
+- **Appearance** (600 posed frames): a photo of a door looks like a door. Open-vocabulary detectors trained on
+  internet images recognise doors, stairs, windows, sheds, sand, brick, grass and garden beds in ordinary
+  photographs without any training of ours. They give *names* but only 2-D boxes and masks.
+
+The bridge is that every frame's camera pose is known (the scan solved it), so a mask pixel is a ray and the ray hits
+the mesh at a 3-D point. This "lift 2-D masks to 3-D by casting through known cameras and voting across views" is
+the standard recipe of SAM3D (2023), SAMPro3D, OpenMask3D (NeurIPS 2023) and Segment Any Mesh (2024), here applied
+with a photogrammetric mesh instead of a LiDAR scan.
+
+## Models, and what runs on this Mac
+
+| model | what it does | on the M4 | access |
+|---|---|---|---|
+| **Grounding DINO** (IDEA, Apache-2) | open-vocabulary boxes from a text list | 2.5 s per 1200 px frame on the GPU (MPS) through 🤗 transformers | ungated |
+| **SAM** (Meta, Apache-2) | a mask for each box | ~1 s per frame on CPU (MPS lacks float64 for its prompts) | ungated |
+| **SAM 3 / 3.1** (Meta, Nov 2025 / Mar 2026) | *all* instances of a concept from one text prompt, better on materials; the natural successor | official code wants CUDA 12.6; 🤗 transformers has `Sam3Model` (device_map="auto"), Ultralytics has a fallback; 3.45 GB | **gated**: request access on huggingface.co/facebook/sam3 with your account, then `hf auth login` |
+| Florence-2, OWLv2 | alternatives for detection | CPU-friendly | ungated |
+| TextureSAM (2025) | texture-aware SAM for material boundaries | research code | open |
+| Depth Anything 3, SAM 3D Objects (2025) | single-image 3-D; not needed, the model already exists | — | open |
+
+Tested today on five of the backyard frames (Grounding DINO base + SAM base, prompts "door, stairs, window, wooden
+fence, brick pavement, grass lawn, sand, garden bed, shed, tree"): the sand pit, the brick path, the lawn, the fence,
+the house windows and the garden gate ("door") all came back with confidences 0.3–0.7 and clean masks.
+
+## The pipeline: an `identify` stage in layout (`scripts/12_identify.py`, prototype)
+
+1. Every k-th registered frame (k = 4–6 gives ~100–150 frames; ~6 minutes).
+2. Grounding DINO with a concept list in two families: **surfaces** (brick pavement, grass lawn, sand, garden bed,
+   gravel, concrete, wooden deck, mulch) and **elements** (door, gate, window, stairs, shed, tree, fence, and
+   furniture to ignore); SAM masks for each box.
+3. Lift: mask pixels (every 10th) → rays through the frame's OPENCV camera (pycolmap) → mesh hits (Open3D) →
+   metres (the layout's transform).
+4. **Surfaces**: hits within 0.35 m of the ground vote for a material in a 10 cm grid, weighted by confidence.
+   Majority per cell, morphological clean-up, contours → polygons per material → simplified and regularised like
+   the boundary (they are bounded by the same edges: a patio is a rectangle, a sand pit is a rectangle).
+5. **Elements**: hits per label clustered in plan (DBSCAN); an instance must be seen from at least two frames.
+   Each instance gets a centroid, footprint box and height range. Then geometry takes over:
+   - *stairs*: `11_detect_stairs.py` restricted to the instance's footprint: horizontal step planes at regular
+     rises, chained; output treads, rise, run, width, direction.
+   - *door / gate*: the instance's centre projected onto the nearest wall line gives the opening's position; its
+     width from the hits' extent along the wall; a door is drawn as a leaf plus a quarter-circle swing in the wall,
+     a gate the same in the fence.
+   - *window*: same, marked as a thin double line in the wall (elevation-level detail, but it tells the plan where
+     the bay window is).
+   - *tree*: canopy circle from the hits' plan extent, trunk point from the lowest hits.
+   - *shed*: its vertical planes become an enclosure polygon (already part of the wall tracer).
+6. **Drawing**: DXF hatch patterns by material on a `SURFACES` layer (AutoCAD `BRICK`, `GRASS`, `AR-SAND`, `EARTH`,
+   `GRAVEL`, `AR-CONC`), stairs on `STAIRS` (treads, arrow, "UP n R @ 17 cm"), doors/gates on `DOORS`, windows on
+   `WINDOWS`, trees on `PLANTING`; the PDF and the app draw the same, with a legend.
+
+## Where the bay window went, and the fix
+
+The boundary comes from the ground footprint regularised with jogs under 1.2 m absorbed. The bay window's jog is
+real and *supported by a detected wall*, so the absorber now refuses to remove any edge that has a wall segment
+running along it (`supported_by_wall`). The measurement you placed on the bay therefore sits on a wall again.
+
+## Stairs from geometry, first try
+
+`11_detect_stairs.py` on the backyard finds the porch steps as horizontal planes at 0.21–0.22 m rise, 0.75–0.9 m
+wide, but as two-step fragments: photogrammetry renders the tread edges soft, so the height bins split. Tightening
+this needs the image detection to say *where* the stairs are, then the geometry to fit a single flight in that
+window (planes constrained to equal rise and run). That combination is the plan above.
+
+## SAM 3
+
+Everything above works today with the ungated models. SAM 3 would improve material boundaries and find every
+instance in one pass. It needs one action from you: request access at https://huggingface.co/facebook/sam3 (and
+sam3.1), then `hf auth login` on this Mac; the stage can then switch models with a flag.
+
+## Sources (part 2)
+
+- SAM 3: https://ai.meta.com/research/sam3/ · https://github.com/facebookresearch/sam3 · https://huggingface.co/facebook/sam3 · https://docs.ultralytics.com/models/sam-3/ · transformers docs https://huggingface.co/docs/transformers/en/model_doc/sam3
+- Grounding DINO in transformers: https://huggingface.co/docs/transformers/en/model_doc/grounding-dino · comparison of open-vocabulary detectors: https://www.forasoft.com/learn/ai-for-video-engineering/articles-ai/open-vocabulary-detection-grounding-dino-florence-2-rtdetr-rfdetr
+- Lifting masks to 3-D: SAM3D https://arxiv.org/pdf/2306.03908 · Segment Any Mesh https://arxiv.org/pdf/2408.13679 · OpenMask3D (NeurIPS 2023)
+- Stairs from point clouds: https://arxiv.org/abs/2405.01918 · https://github.com/Shiaoming/stair-perception · GSMRec https://www.tandfonline.com/doi/full/10.1080/17538947.2025.2598917
+- Doors and windows from point clouds (ISPRS 2024): https://isprs-archives.copernicus.org/articles/XLVIII-2-W8-2024/37/2024/
+- Materials: TextureSAM https://arxiv.org/html/2505.16540v1 · SAM + Grounding DINO for remote sensing https://www.sciencedirect.com/science/article/pii/S2666544125000012
+- Plan symbols: https://www.archtoolbox.com/architectural-floor-plan-symbols/ · https://architecturecourses.org/design/architectural-drawing-symbols

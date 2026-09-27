@@ -415,9 +415,32 @@ def remove_spikes(poly, min_turn_deg: float = 20.0):
     return p if not p.is_empty and p.geom_type == "Polygon" else poly
 
 
-def collapse_short_edges(poly, min_edge: float = 0.9, passes: int = 4):
+def supported_by_wall(a, b, walls, max_offset=0.35, ang_tol=6.0):
+    """True when a detected wall runs along this edge: then the jog is real (a bay window, a step in the fence)."""
+    d = b - a
+    L = np.linalg.norm(d)
+    if L < 1e-6:
+        return False
+    u = d / L
+    n = np.array([-u[1], u[0]])
+    for w in walls:
+        wd = w[1] - w[0]
+        wl = np.linalg.norm(wd)
+        wu = wd / max(wl, 1e-9)
+        if np.degrees(np.arccos(min(1.0, abs(u @ wu)))) > ang_tol:
+            continue
+        mid = (a + b) / 2
+        off = abs((mid - w[0]) @ np.array([-wu[1], wu[0]]))
+        t = (mid - w[0]) @ wu
+        if off <= max_offset and -0.3 <= t <= wl + 0.3:
+            return True
+    return False
+
+
+def collapse_short_edges(poly, min_edge: float = 0.9, passes: int = 4, walls=()):
     """An architect draws a jog only when it is real: edges shorter than min_edge are absorbed into their neighbours
-    (the vertex pair is replaced by the intersection of the surrounding edges' lines)."""
+    (the vertex pair is replaced by the intersection of the surrounding edges' lines), unless a detected wall
+    supports the edge."""
     from shapely.geometry import Polygon
     xy = np.array(poly.exterior.coords)[:-1]
     for _ in range(passes):
@@ -425,6 +448,9 @@ def collapse_short_edges(poly, min_edge: float = 0.9, passes: int = 4):
         if n <= 4:
             break
         L = np.array([np.linalg.norm(xy[(i + 1) % n] - xy[i]) for i in range(n)])
+        for k in range(n):
+            if supported_by_wall(xy[k], xy[(k + 1) % n], walls):
+                L[k] = np.inf
         i = int(np.argmin(L))
         if L[i] >= min_edge:
             break
@@ -499,10 +525,10 @@ def main() -> int:
             p = p.simplify(0.6)
             for _ in range(2):                            # regularise, absorb jogs, regularise again
                 p = regularize_polygon(p, fams)
-                p = remove_spikes(collapse_short_edges(p, a.min_edge, passes=10))
+                p = remove_spikes(collapse_short_edges(p, a.min_edge, passes=10, walls=aligned_walls))
             p = snap_polygon_to_walls(p, aligned_walls, max_offset=0.8)
             p = regularize_polygon(p, fams)
-            p = remove_spikes(collapse_short_edges(p, a.min_edge, passes=6))
+            p = remove_spikes(collapse_short_edges(p, a.min_edge, passes=6, walls=aligned_walls))
             p = regularize_polygon(p, fams)
             if p.geom_type == "Polygon" and not p.is_empty:
                 boundary.append(p)

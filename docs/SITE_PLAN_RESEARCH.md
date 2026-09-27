@@ -212,8 +212,15 @@ was missed on the first pass because the detector returned the merged phrase "br
 label match dropped it; the phrase is now mapped to its first concept. Frames every 4th instead of 6th cover the
 side passage, which the sparser subset skipped.
 
-Cost: Grounding DINO 2.5 s and SAM 1 s per frame, ray casting negligible; 150 frames in about 9 minutes. As a
-layout stage that is acceptable; it can also cache per-frame masks so a re-layout does not re-detect.
+Second pass, 150 frames (every 4th), 6 minutes: the brick patio comes out as one large zone on the right half, the
+lawn as the middle, garden beds along the fences, the deck by the top fence; the house is now labelled "house"
+(36 k voxels from 60 frames), the porch stairs sit at (2.9, −0.9) with the house door right behind them at
+(3.1, −2.5), the two fence gates and the far-corner door are found, five windows line the house. The sand pit is
+labelled "gravel" (a fine-grained pale surface; the concept list will get "sandbox"). The side passage stays thin
+because few frames look down it; a denser frame step there, or all frames, fixes that.
+
+Cost: Grounding DINO 2.5 s and SAM 1 s per frame, ray casting negligible; 150 frames in about 6 minutes. One
+lesson: object hits must be binned into voxels before clustering; clustering raw points once filled 55 GB of swap.
 
 ## Where the bay window went, and the fix
 

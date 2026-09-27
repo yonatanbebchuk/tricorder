@@ -88,6 +88,7 @@ Sources: `app/Tricorder/` (XcodeGen spec in `app/project.yml`; `make xcode` open
 ```bash
 make new VIDEO=data/backyard.MOV NAME="Backyard" MAXF=600     # environment + recording + reconstruct run, executes now
 make run ENV=backyard RUN=r1                                    # (re)execute: finished stages are kept, asset re-published
+python -m tricorder.pipeline run backyard r1 --redo preview     # redo one stage (e.g. a lighter 3D preview)
 make plan ENV=backyard ASSET=scan3d-1                           # after answering the scan's measurement prompts
 make list
 python -m tricorder.pipeline new-run backyard reconstruct --recording rec1 --features ALIKED --matcher LIGHTGLUE --start
@@ -124,7 +125,7 @@ Move the video to `data/backyard.mp4` (AirDrop keeps full quality; iCloud "optim
 2. **COLMAP** (`scripts/02_sfm.sh`): features, sequential + vocab-tree matching, relaxed mapper, undistort.
 3. **OpenMVS** (`scripts/03_dense.sh`): dense cloud, mesh, fragment cleanup + decimation to 4M faces, texture. Resumable.
 4. **Landmarks** (`scripts/04..06`, `pick_landmarks.py`): levelled unscaled preview plan, plus the measurement prompts.
-5. **Preview** (`scripts/07_preview_model.py`, Blender): the textured mesh decimated to 300k faces as `preview.usdz` for the app's 3D viewer.
+5. **Preview** (`scripts/07_preview_model.py`, Blender): the textured mesh decimated to 300k faces, textures capped at 4096², as `preview.usdz` for the app's 3D viewer (about 30 MB; the 8192² OpenMVS atlas alone would take 256 MB of GPU memory per view).
 6. **Plan** (`solve_scale.py` + Blender, a separate `plan` run on the scan asset): scale / level / north from your answers, `plan_grid.png`, `plan.blend`, metric cloud.
 
 COLMAP knobs (env vars or the run form):

@@ -6,7 +6,7 @@
     python -m tricorder.pipeline new-recording <env> data/walk.MOV [--name ... --fps 2 --max-frames 400 --hdr auto]
     python -m tricorder.pipeline new-run <env> reconstruct --recording rec1 [--features ALIKED ...] [--start]
     python -m tricorder.pipeline new-run <env> plan --asset scan3d-1 [--px-per-m 50] [--start]
-    python -m tricorder.pipeline run    <env> <run>          # execute (finished stages are kept), then publish the asset
+    python -m tricorder.pipeline run    <env> <run> [--redo preview]   # execute (finished stages kept unless redone), publish
     python -m tricorder.pipeline launch run <env> <run>      # same, detached (own session, caffeinate); used by the Mac app
     python -m tricorder.pipeline list
 
@@ -27,7 +27,7 @@ from pathlib import Path
 
 from . import metrics
 from .models import (ASSET_KINDS, DATA, ENVS, ROOT, RUN_KINDS, VIDEO_EXT, Asset, Environment, FrameSettings, Recording,
-                     Run, RunSettings, next_id, now, slugify, unique_id)
+                     Run, RunSettings, Stage, next_id, now, slugify, unique_id)
 
 PY = sys.executable
 SCRIPTS = ROOT / "scripts"
@@ -326,8 +326,14 @@ def _install_cancel_handler():
     signal.signal(signal.SIGINT, handler)
 
 
-def run_pipeline(env_id: str, run_id: str) -> int:
+def run_pipeline(env_id: str, run_id: str, redo: list[str] | None = None) -> int:
+    """Execute a run. Finished stages are skipped unless named in `redo`; the asset is (re)published at the end."""
     run = Run.load(env_id, run_id)
+    for name in redo or []:
+        if name not in run.stages:
+            print(f"no stage {name!r} in a {run.kind} run", file=sys.stderr)
+            return 2
+        run.stages[name] = Stage()
     run.status, run.pid, run.started_at, run.finished_at = "running", os.getpid(), now(), None
     run.save()
     _install_cancel_handler()
@@ -411,7 +417,9 @@ def main(argv=None) -> int:
     p.add_argument("--recording", help="input recording id (reconstruct)")
     p.add_argument("--asset", help="input asset id (plan)")
     add_run_settings(p)
-    p = sub.add_parser("run"); p.add_argument("env_id"); p.add_argument("run_id")
+    p = sub.add_parser("run", help="execute a run; finished stages are kept unless --redo names them")
+    p.add_argument("env_id"); p.add_argument("run_id")
+    p.add_argument("--redo", action="append", default=[], metavar="STAGE", help="reset this stage first (repeatable), e.g. --redo preview")
     p = sub.add_parser("list")
     p = sub.add_parser("launch", help="start a pipeline command detached (own session, under caffeinate) and return at once")
     p.add_argument("args", nargs=argparse.REMAINDER, help="e.g. run <env_id> <run_id>")
@@ -441,7 +449,7 @@ def main(argv=None) -> int:
         print(f"env {env.id}  run {run.id}  -> {run.dir}")
         return run_pipeline(env.id, run.id) if a.start else 0
     if a.cmd == "run":
-        return run_pipeline(a.env_id, a.run_id)
+        return run_pipeline(a.env_id, a.run_id, a.redo)
     if a.cmd == "launch":
         if not a.args:
             ap.error("launch needs a pipeline command")

@@ -18,6 +18,7 @@ ap = argparse.ArgumentParser(description=__doc__)
 ap.add_argument("--mesh", required=True, help=".obj (textured) or .ply")
 ap.add_argument("--transform", help="transform.json (metric, Z-up); omit to keep model coordinates")
 ap.add_argument("--faces", type=int, default=300_000, help="target face count for the preview")
+ap.add_argument("--texture", type=int, default=4096, help="longest texture side in the USDZ (OpenMVS atlases are 8192², too heavy for a viewer)")
 ap.add_argument("--out", required=True, help="output .usdz path")
 args = ap.parse_args(argv)
 
@@ -58,5 +59,6 @@ out = Path(args.out).resolve()
 out.parent.mkdir(parents=True, exist_ok=True)
 bpy.ops.wm.usd_export(filepath=str(out), export_materials=True, generate_preview_surface=True, export_normals=True,
                       triangulate_meshes=True, convert_orientation=True, export_global_forward_selection="NEGATIVE_Z",
-                      export_global_up_selection="Y", selected_objects_only=False)
+                      export_global_up_selection="Y", selected_objects_only=False,
+                      usdz_downscale_size="CUSTOM", usdz_downscale_custom_size=args.texture)
 print(f"wrote {out} ({out.stat().st_size / 1e6:.1f} MB)")

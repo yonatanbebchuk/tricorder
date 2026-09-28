@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compatibility wrapper: environment + recording + reconstruct run from a video, executed in the foreground.
+# Compatibility wrapper: environment + recording + scan run from a video, executed in the foreground.
 #   ./run_all.sh data/backyard.MOV "Backyard noon"
 # Env: FPS, MAXF, RES_LEVEL, FEATURES, MATCHER, MATCHING, MEASURES (same names as before).
 set -euo pipefail

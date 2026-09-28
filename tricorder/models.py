@@ -6,7 +6,7 @@ work/environments/<env>/recordings/<rec>/images/         frames extracted from t
 work/environments/<env>/runs/<run>/run.json              one processing job: kind, inputs, settings, stages, output asset
 work/environments/<env>/runs/<run>/logs/<stage>.log
 work/environments/<env>/runs/<run>/                      working files (database.db, sparse/, dense/, measure/, ...)
-work/environments/<env>/assets/<asset>/asset.json        a deliverable made by a run (3D scan, site plan); its files live next to it
+work/environments/<env>/assets/<asset>/asset.json        a deliverable made by a run (3D model, site plan); its files live next to it
 
 A run consumes either a recording (scan) or an earlier asset (layout) and publishes exactly one asset.
 Assets are immutable: running again publishes a new asset and the earlier ones stay as history.

@@ -90,7 +90,7 @@ feature matching for the old frames.
 
 ### 3.1 Measurements are recordings
 
-Decided 2026-09-27 (user): a tape measurement is sensed data about the place, so it is a **recording** of kind
+Decided 2026-09-27: a tape measurement is sensed data about the place, so it is a **recording** of kind
 `measurements`, not a property of one model. Each item is *two pixels on a frame of a video recording + the metres
 taped between them* (+ note); a recording may also hold a compass bearing read at a frame. Any layout can take any
 measurement recordings, on any model built from that footage; sets can be compared across layouts. Implemented:
@@ -131,7 +131,7 @@ LiDAR track, or two GPS-tagged photos) the same code becomes a similarity fit.
 1. *solve*: `transform.json` (scale, level, north) from the constraints; metric mesh and cloud.
 2. *ortho*: Blender orthographic top-down render at a chosen resolution (px/m) → `orthomosaic.png` + world file.
    Also a height render → `dem.tif` (32-bit, metres).
-3. *trace* (user request 2026-09-27: "straight clear lines like an architect would draw"): the local height range in
+3. *trace* (the goal, 2026-09-27: "straight clear lines like an architect would draw"): the local height range in
    a 0.4 m window marks steps; steps above 0.5 m are walls/fences, above 0.08 m edges/curbs; the step bands are
    skeletonised, a probabilistic Hough transform gives segments, near-collinear segments are merged, the site's
    dominant axis is found from the long segments and segments within 12° are snapped to it or its perpendicular,
@@ -169,4 +169,3 @@ the image, both in metres), and offers Open in QCAD / Blender / Preview.
 3. **Extend scan**: incremental registration with fixed old poses, depth-map reuse, photo recordings,
    `derived_from` chains and measurement inheritance.
 
-Open questions for the user are in the chat summary; the answers go here once decided.

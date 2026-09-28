@@ -5,6 +5,7 @@
 # Env:   RES_LEVEL  0 = full res (slow, RAM hungry), 1 = half, 2 = quarter (default 2, fine for a backyard)
 #        REFINE=1   run RefineMesh (slow; sharper walls/edges)
 #        MIN_FACES  detached mesh fragments smaller than this are dropped before texturing (default 2000)
+#        MAX_FACES  decimate the cleaned mesh to at most this many faces before texturing (default 4000000; 0 = never)
 #        OPENMVS_BIN  directory with the OpenMVS binaries (default tools/openmvs-install/bin/OpenMVS)
 set -euo pipefail
 DENSE=$(cd "${1:?usage: 03_dense.sh <dense_dir>}" && pwd)
@@ -45,7 +46,7 @@ fi
 MESH=scene_dense_mesh.ply
 
 log "clean_mesh (drop detached fragments < ${MIN_FACES:-2000} faces)"
-if "$ROOT/.venv/bin/python" "$ROOT/scripts/clean_mesh.py" "$MESH" --min-faces "${MIN_FACES:-2000}" --out scene_dense_mesh_clean.ply 2>&1 | grep -v "Open3D WARNING"; then
+if "$ROOT/.venv/bin/python" "$ROOT/scripts/clean_mesh.py" "$MESH" --min-faces "${MIN_FACES:-2000}" --max-faces "${MAX_FACES:-4000000}" --out scene_dense_mesh_clean.ply 2>&1 | grep -v "Open3D WARNING"; then
   MESH=scene_dense_mesh_clean.ply
 else
   echo "cleanup failed, texturing the raw mesh"

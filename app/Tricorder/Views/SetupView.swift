@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Shown until the app knows where the backyard-scanner checkout (python env, scripts, work/) lives.
+/// Shown until the app knows where the Tricorder checkout (python env, scripts, work/) lives.
 struct SetupView: View {
     @Environment(Workspace.self) private var ws
 

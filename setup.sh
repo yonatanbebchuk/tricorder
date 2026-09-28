@@ -18,7 +18,8 @@ fi
 log "Python environment (.venv via uv)"
 command -v uv >/dev/null || brew install uv
 [ -d .venv ] || uv venv --python 3.12 .venv
-uv pip install --python .venv/bin/python numpy "opencv-python>=4.9" "open3d>=0.19" "fastapi>=0.115" "uvicorn>=0.30" "python-multipart>=0.0.9"
+uv pip install --python .venv/bin/python -e .            # pyproject.toml: numpy, opencv, open3d, pycolmap, ezdxf, shapely, ...
+uv pip install --python .venv/bin/python -e ".[identify]"  # optional: torch + transformers for scripts/12_identify.py (about 3 GB)
 
 log "OpenMVS (CPU build; provides the dense/mesh/texture stage COLMAP cannot do without CUDA)"
 mkdir -p tools

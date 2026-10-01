@@ -212,6 +212,36 @@ final class Workspace {
         }
     }
 
+    /// A recipe: one run, or a chain where each later step takes the previous run's asset ("@r5") and is launched
+    /// by it. The first run starts now; the page of the first run opens.
+    func createRuns(env: String, steps: [RunStep]) async -> Bool {
+        guard let root, !steps.isEmpty else { return false }
+        return await attempt("Starting the run failed") {
+            var previous: String?
+            var first: String?
+            for var step in steps {
+                if let previous {
+                    step.inputs["asset"] = ["@\(previous)"]
+                    step.after = previous
+                }
+                let id = try await Pipeline.createRun(root: root, envId: env, step: step, start: previous == nil)
+                previous = id
+                if first == nil { first = id }
+            }
+            await refresh()
+            if let first { open(.run(env, first)) }
+        }
+    }
+
+    func createPhotosRecording(env: String, files: [URL], name: String) async -> Bool {
+        guard let root else { return false }
+        return await attempt("Adding the photos failed") {
+            let rec = try await Pipeline.createPhotosRecording(root: root, envId: env, files: files, name: name)
+            await refresh()
+            open(.recording(env, rec))
+        }
+    }
+
     func startRun(_ r: RunRecord) async {
         guard let root else { return }
         _ = await attempt("Starting the run failed") {

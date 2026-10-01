@@ -23,11 +23,13 @@ struct Stage: Decodable, Sendable, Hashable {
     var error: String?
     var log: String?
     var durationS: Double?
+    var outputs: [AssetFile] = []      // what the stage left behind (paths relative to the run dir)
+    var preview: String?               // a small picture of the result, relative to the run dir
 
     init() {}
 
     enum CodingKeys: String, CodingKey {
-        case status, metrics, error, log
+        case status, metrics, error, log, outputs, preview
         case startedAt = "started_at", finishedAt = "finished_at", durationS = "duration_s"
     }
 
@@ -40,6 +42,8 @@ struct Stage: Decodable, Sendable, Hashable {
         error = try c.decodeIfPresent(String.self, forKey: .error)
         log = try c.decodeIfPresent(String.self, forKey: .log)
         durationS = try c.decodeIfPresent(Double.self, forKey: .durationS)
+        outputs = try c.decodeIfPresent([AssetFile].self, forKey: .outputs) ?? []
+        preview = try c.decodeIfPresent(String.self, forKey: .preview)
     }
 
     var duration: Double? {
@@ -80,9 +84,10 @@ struct VideoInfo: Decodable, Sendable, Hashable {
     var colorTransfer: String?
     var hdr: String?
     var error: String?
+    var count: Int?                    // photos recording: how many stills
 
     enum CodingKeys: String, CodingKey {
-        case path, original, size, width, height, fps, frames, hdr, error
+        case path, original, size, width, height, fps, frames, hdr, error, count
         case durationS = "duration_s", colorTransfer = "color_transfer"
     }
 
@@ -102,6 +107,7 @@ struct VideoInfo: Decodable, Sendable, Hashable {
         colorTransfer = try c.decodeIfPresent(String.self, forKey: .colorTransfer)
         hdr = try c.decodeIfPresent(String.self, forKey: .hdr)
         error = try c.decodeIfPresent(String.self, forKey: .error)
+        count = try c.decodeIfPresent(Int.self, forKey: .count)
     }
 
     var isHDR: Bool { let h = hdr ?? "none"; return h != "none" && !h.isEmpty }
@@ -156,7 +162,7 @@ struct Recording: Decodable, Sendable, Hashable, Identifiable {
     var envId: String
     var name: String
     var createdAt: String
-    var kind: String               // video | measurements
+    var kind: String               // video | photos | measurements
     var source: VideoInfo
     var frames: Stage
     var frameSettings: FrameSettings
@@ -166,6 +172,10 @@ struct Recording: Decodable, Sendable, Hashable, Identifiable {
     var north: MeasurementNorth?
 
     var isMeasurements: Bool { kind == "measurements" }
+    var isPhotos: Bool { kind == "photos" }
+    /// Footage: something with frames (a video or photos), as opposed to measurements.
+    var isFootage: Bool { !isMeasurements }
+    var inputKind: InputKind { InputKind(rawValue: kind) ?? .video }
 
     enum CodingKeys: String, CodingKey {
         case id, name, kind, source, frames, notes, thumbnail, items, north
@@ -191,23 +201,78 @@ struct Recording: Decodable, Sendable, Hashable, Identifiable {
 
 // MARK: - run
 
-enum RunKind: String, Decodable, Sendable, Hashable, CaseIterable {
-    case scan, layout
+/// What a run's input slot can hold: a recording kind or an asset kind (the raw values match the manifests).
+enum InputKind: String, Sendable, Hashable, CaseIterable {
+    case video, photos, measurements, model3d, sitePlan = "site_plan"
 
     var label: String {
-        switch self { case .scan: "Environment scan"; case .layout: "Layout" }
+        switch self { case .video: "Video"; case .photos: "Photos"; case .measurements: "Measurements"; case .model3d: "3D Model"; case .sitePlan: "Site Plan" }
+    }
+    var symbol: String {
+        switch self { case .video: "video"; case .photos: "photo.on.rectangle"; case .measurements: "ruler"; case .model3d: "cube.transparent"; case .sitePlan: "map" }
+    }
+    var isAsset: Bool { self == .model3d || self == .sitePlan }
+}
+
+/// One input of a run kind: which key of `Run.inputs` it fills, what it accepts, how many.
+struct InputSlot: Hashable, Sendable, Identifiable {
+    let key: String
+    let label: String
+    let accepts: [InputKind]
+    let min: Int
+    let max: Int
+    var id: String { key }
+    var isRequired: Bool { min > 0 }
+    var isSingle: Bool { max == 1 }
+    func accepts(_ k: InputKind) -> Bool { accepts.contains(k) }
+}
+
+/// Mirrors RUN_KINDS in tricorder/models.py: a recipe with input slots, stages and one output asset kind.
+enum RunKind: String, Decodable, Sendable, Hashable, CaseIterable {
+    case scan, extend, layout
+
+    var label: String {
+        switch self { case .scan: "Environment scan"; case .extend: "Extend scan"; case .layout: "Layout" }
     }
     var verb: String {
-        switch self { case .scan: "Scan"; case .layout: "Lay out" }
+        switch self { case .scan: "Scan"; case .extend: "Extend"; case .layout: "Lay out" }
     }
-    /// What the run consumes: a recording, or an asset of this kind.
-    var inputAssetKind: AssetKind? { self == .layout ? .model3d : nil }
+    var blurb: String {
+        switch self {
+        case .scan: "A filmed walk becomes a textured 3D model: COLMAP poses, OpenMVS dense cloud, mesh, texture."
+        case .extend: "New videos or photos are registered into an existing model's cameras; everything is re-optimised and re-meshed."
+        case .layout: "A 3D model plus tape measurements becomes a site plan: true scale, orthomosaic, wall lines, DXF and PDF."
+        }
+    }
+    var symbol: String {
+        switch self { case .scan: "cube.transparent"; case .extend: "plus.viewfinder"; case .layout: "map" }
+    }
+    /// What the run consumes: an asset of this kind (extend, layout), or nothing but recordings.
+    var inputAssetKind: AssetKind? { self == .scan ? nil : .model3d }
     var outputKind: AssetKind {
-        switch self { case .scan: .model3d; case .layout: .sitePlan }
+        switch self { case .scan, .extend: .model3d; case .layout: .sitePlan }
     }
     var stages: [String] {
-        switch self { case .scan: ["sfm", "dense", "landmarks", "preview"]; case .layout: ["solve", "ortho", "trace", "draw", "preview"] }
+        switch self {
+        case .scan: ["sfm", "dense", "landmarks", "preview"]
+        case .extend: ["register", "dense", "landmarks", "preview"]
+        case .layout: ["solve", "ortho", "trace", "draw", "preview"]
+        }
     }
+    var slots: [InputSlot] {
+        switch self {
+        case .scan: [InputSlot(key: "recording", label: "Video", accepts: [.video], min: 1, max: 1)]
+        case .extend: [InputSlot(key: "asset", label: "3D model", accepts: [.model3d], min: 1, max: 1),
+                       InputSlot(key: "recordings", label: "New footage", accepts: [.video, .photos], min: 1, max: 8)]
+        case .layout: [InputSlot(key: "asset", label: "3D model", accepts: [.model3d], min: 1, max: 1),
+                       InputSlot(key: "recordings", label: "Measurements", accepts: [.measurements], min: 0, max: 8)]
+        }
+    }
+    /// Rough stage durations for the progress bar when the environment has no history yet (seconds).
+    static let typicalSeconds: [String: Double] = [
+        "frames": 120, "sfm": 1800, "register": 900, "dense": 7200, "landmarks": 120, "preview": 30,
+        "solve": 25, "ortho": 6, "trace": 10, "draw": 12,
+    ]
 }
 
 struct RunSettings: Decodable, Sendable, Hashable {
@@ -267,9 +332,10 @@ struct Run: Decodable, Sendable, Hashable, Identifiable {
     var stages: [String: Stage]
     var outputAsset: String?
     var label: String
+    var after: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, inputs, settings, status, pid, stages, label
+        case id, kind, inputs, settings, status, pid, stages, label, after
         case envId = "env_id", createdAt = "created_at", startedAt = "started_at", finishedAt = "finished_at"
         case outputAsset = "output_asset"
     }
@@ -290,11 +356,19 @@ struct Run: Decodable, Sendable, Hashable, Identifiable {
         for k in kind.stages where stages[k] == nil { stages[k] = Stage() }
         outputAsset = try c.decodeIfPresent(String.self, forKey: .outputAsset)
         label = try c.decodeIfPresent(String.self, forKey: .label) ?? ""
+        after = try c.decodeIfPresent(String.self, forKey: .after)
     }
 
     func stage(_ key: String) -> Stage { stages[key] ?? Stage() }
     var inputRecordingId: String? { inputs["recording"]?.string }
-    var inputAssetId: String? { inputs["asset"]?.string }
+    /// The asset this run consumes; nil while it still names another run's output ("@r5").
+    var inputAssetId: String? { inputs["asset"]?.string.flatMap { $0.hasPrefix("@") ? nil : $0 } }
+    /// The run whose output this run waits for (a chained run).
+    var waitsFor: String? {
+        if let a = inputs["asset"]?.string, a.hasPrefix("@") { return String(a.dropFirst()) }
+        return after
+    }
+    var isQueued: Bool { status == .queued }
     /// Every recording this run consumed: the video of a scan, the measurement recordings of a layout.
     var inputRecordingIds: [String] {
         var ids: [String] = []
@@ -315,6 +389,7 @@ enum AssetKind: String, Decodable, Sendable, Hashable, CaseIterable {
     var symbol: String {
         switch self { case .model3d: "cube.transparent"; case .sitePlan: "map" }
     }
+    var inputKind: InputKind { self == .model3d ? .model3d : .sitePlan }
 }
 
 struct AssetFile: Decodable, Sendable, Hashable, Identifiable {
@@ -334,10 +409,12 @@ struct Asset: Decodable, Sendable, Hashable, Identifiable {
     var files: [AssetFile]
     var metrics: [String: JSONValue]
     var notes: String
+    var derivedFrom: String?
+    var sources: [[String: JSONValue]]
 
     enum CodingKeys: String, CodingKey {
-        case id, kind, name, files, metrics, notes
-        case envId = "env_id", runId = "run_id", createdAt = "created_at"
+        case id, kind, name, files, metrics, notes, sources
+        case envId = "env_id", runId = "run_id", createdAt = "created_at", derivedFrom = "derived_from"
     }
 
     init(from decoder: any Decoder) throws {
@@ -351,6 +428,8 @@ struct Asset: Decodable, Sendable, Hashable, Identifiable {
         files = try c.decodeIfPresent([AssetFile].self, forKey: .files) ?? []
         metrics = try c.decodeIfPresent([String: JSONValue].self, forKey: .metrics) ?? [:]
         notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        derivedFrom = try c.decodeIfPresent(String.self, forKey: .derivedFrom)
+        sources = try c.decodeIfPresent([[String: JSONValue]].self, forKey: .sources) ?? []
     }
 }
 

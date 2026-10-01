@@ -4,10 +4,24 @@ import Foundation
 /// synchronous and off the main actor; Workspace wraps it in detached tasks.
 enum ManifestStore {
     static let stageLabels: [String: String] = [
-        "frames": "Frames", "sfm": "COLMAP", "dense": "OpenMVS", "landmarks": "Landmarks", "preview": "Preview",
+        "frames": "Frames", "sfm": "COLMAP", "register": "Register", "dense": "OpenMVS", "landmarks": "Landmarks", "preview": "Preview",
         "solve": "Scale & level", "ortho": "Orthomosaic", "trace": "Linework", "draw": "Drawing",
     ]
+    /// One line on what each stage does, for the pipeline view.
+    static let stageBlurbs: [String: String] = [
+        "frames": "the sharpest frame per window, HDR tone-mapped",
+        "sfm": "features, matching, camera poses, sparse cloud",
+        "register": "new frames posed into the model, full bundle adjustment",
+        "dense": "dense cloud, mesh, cleanup, texture",
+        "landmarks": "levelled preview plan, measurement prompts",
+        "preview": "300k-face USDZ for the viewer",
+        "solve": "measurements → scale, level, north; metric cloud",
+        "ortho": "top-down render at true scale",
+        "trace": "vertical surfaces → walls; dimensioned boundary",
+        "draw": "DEM, contours, DXF, PDF sheet",
+    ]
     static let videoExtensions: Set<String> = ["mov", "mp4", "m4v", "mkv", "avi"]
+    static let imageExtensions: Set<String> = ["jpg", "jpeg", "heic", "heif", "png", "dng", "tif", "tiff"]
 
     static func environmentsDir(_ root: URL) -> URL { root.appending(path: "work/environments") }
     static func dataDir(_ root: URL) -> URL { root.appending(path: "data") }

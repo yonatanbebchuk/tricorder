@@ -106,9 +106,9 @@ struct NewEnvironmentSheet: View {
 // MARK: - new recording
 
 enum RecordingKind: String, CaseIterable, Identifiable {
-    case video, measurements
+    case video, photos, measurements
     var id: String { rawValue }
-    var label: String { self == .video ? "Video" : "Measurements" }
+    var label: String { switch self { case .video: "Video"; case .photos: "Photos"; case .measurements: "Measurements" } }
 }
 
 struct NewRecordingSheet: View {
@@ -131,14 +131,79 @@ struct NewRecordingSheet: View {
     @State private var settings = RunSettings()
     @State private var label = ""
     @State private var importing = false
+    @State private var importingPhotos = false
+    @State private var photos: [URL] = []
     @State private var busy = false
     @State private var message = ""
 
     var body: some View {
-        if kind == .measurements {
-            measurementsBody
-        } else {
-            videoBody
+        switch kind {
+        case .measurements: measurementsBody
+        case .photos: photosBody
+        case .video: videoBody
+        }
+    }
+
+    private var photosBody: some View {
+        SheetFrame(title: "Add photos", lead: "Still photos of \(ws.environment(envId)?.env.name ?? "the environment"): close-ups, a corner the walk missed. An extend scan registers them into an existing 3D model.",
+                   width: 680, height: 560) {
+            Section { kindPicker }
+            Section("Photos") {
+                VStack(spacing: 4) {
+                    if photos.isEmpty {
+                        Image(systemName: "photo.on.rectangle").font(.title2).foregroundStyle(.secondary)
+                        Text("Drop photos or a folder here, or click to choose").fontWeight(.medium)
+                        Text("HEIC / JPEG from the iPhone").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Image(systemName: "photo.on.rectangle.angled").font(.title2).foregroundStyle(Theme.accent)
+                        Text("\(photos.count) photo\(photos.count == 1 ? "" : "s")").fontWeight(.medium)
+                        Text(photos.first?.deletingLastPathComponent().path ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 96).padding(12)
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(nsColor: .separatorColor), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
+                .contentShape(Rectangle())
+                .onTapGesture { importingPhotos = true }
+                .dropDestination(for: URL.self) { urls, _ in addPhotos(urls) } isTargeted: { _ in }
+                if !photos.isEmpty { Button("Clear") { photos = [] } }
+                TextField("Recording name", text: $name, prompt: Text("Close-ups of the shed"))
+            }
+        } footer: {
+            Text(message).font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+            Button(busy ? "Adding…" : "Add Photos") { createPhotos() }
+                .buttonStyle(.glassProminent).keyboardShortcut(.defaultAction)
+                .disabled(photos.isEmpty || busy)
+        }
+        .fileImporter(isPresented: $importingPhotos, allowedContentTypes: [.image, .folder], allowsMultipleSelection: true) { r in
+            if case .success(let u) = r { _ = addPhotos(u) }
+        }
+    }
+
+    private func addPhotos(_ urls: [URL]) -> Bool {
+        var found: [URL] = []
+        for u in urls {
+            if (try? u.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                let items = (try? FileManager.default.contentsOfDirectory(at: u, includingPropertiesForKeys: nil)) ?? []
+                found += items.filter { ManifestStore.imageExtensions.contains($0.pathExtension.lowercased()) }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+                if name.isEmpty { name = u.lastPathComponent }
+            } else if ManifestStore.imageExtensions.contains(u.pathExtension.lowercased()) {
+                found.append(u)
+            }
+        }
+        guard !found.isEmpty else { return false }
+        photos += found.filter { !photos.contains($0) }
+        return true
+    }
+
+    private func createPhotos() {
+        busy = true
+        message = "copying the photos…"
+        Task {
+            let ok = await ws.createPhotosRecording(env: envId, files: photos, name: name.isEmpty ? "\(photos.count) photos" : name)
+            busy = false
+            if ok { dismiss() } else { message = "" }
         }
     }
 
@@ -243,100 +308,6 @@ struct NewRecordingSheet: View {
                                               reconstruct: reconstruct ? settings : nil, label: label)
             busy = false
             if ok { dismiss() } else { message = "" }
-        }
-    }
-}
-
-// MARK: - new run
-
-struct NewRunSheet: View {
-    @Environment(Workspace.self) private var ws
-    @Environment(\.dismiss) private var dismiss
-    let request: NewRunRequest
-
-    @State private var kind: RunKind
-    @State private var inputId: String?
-    @State private var chosenMeasurements: Set<String> = []
-    @State private var settings = RunSettings()
-    @State private var label = ""
-    @State private var busy = false
-
-    init(request: NewRunRequest) {
-        self.request = request
-        _kind = State(initialValue: request.kind)
-        _inputId = State(initialValue: request.inputId)
-    }
-
-    private var env: EnvironmentRecord? { ws.environment(request.envId) }
-    private var scans: [AssetRecord] { env?.assets.filter { $0.asset.kind == .model3d }.reversed() ?? [] }
-
-    var body: some View {
-        SheetFrame(title: "New run", lead: "An environment scan turns a recording into a 3D model; a layout turns a measured 3D model into a site plan. Each run publishes one new asset; earlier assets stay in the history.",
-                   width: 640, height: 640) {
-            Section("What to make") {
-                Picker("Kind", selection: $kind) {
-                    ForEach(RunKind.allCases, id: \.self) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                if kind == .scan {
-                    Picker("Recording", selection: $inputId) {
-                        Text("—").tag(String?.none)
-                        ForEach(env?.videoRecordings ?? []) { r in
-                            Text("\(r.rec.name) · \(Format.videoLine(r.rec.source))").tag(String?.some(r.rec.id))
-                        }
-                    }
-                } else {
-                    Picker("3D model", selection: $inputId) {
-                        Text("—").tag(String?.none)
-                        ForEach(scans) { a in
-                            Text("\(a.asset.name) · \(Format.when(a.asset.createdAt))").tag(String?.some(a.asset.id))
-                        }
-                    }
-                    let measurements = env?.measurementRecordings ?? []
-                    if measurements.isEmpty {
-                        Text("No measurement recordings in this environment. Scale will be estimated from the camera height (phone at chest height, about ±10 %) and the plan marked as estimated. Add a measurements recording for a true-scale plan.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        ForEach(measurements) { m in
-                            Toggle(isOn: Binding(get: { chosenMeasurements.contains(m.rec.id) },
-                                                 set: { on in if on { chosenMeasurements.insert(m.rec.id) } else { chosenMeasurements.remove(m.rec.id) } })) {
-                                Text("\(m.rec.name) · \(m.rec.items.count) measurement\(m.rec.items.count == 1 ? "" : "s")" + (m.rec.north != nil ? " · north" : ""))
-                            }
-                        }
-                        if chosenMeasurements.isEmpty {
-                            Text("None chosen: scale will be estimated from the camera height (about ±10 %).").font(.caption).foregroundStyle(Theme.warn)
-                        }
-                    }
-                }
-            }
-            Section("Settings") {
-                if kind == .scan { ReconstructSettingsForm(settings: $settings) } else { LayoutSettingsForm(settings: $settings) }
-                TextField("Label", text: $label, prompt: Text("optional, e.g. learned features"))
-            }
-        } footer: {
-            Spacer()
-            Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-            Button(busy ? "Starting…" : "Start Run") { start() }
-                .buttonStyle(.glassProminent).keyboardShortcut(.defaultAction)
-                .disabled(inputId == nil || busy)
-        }
-        .onChange(of: kind) { _, k in
-            if k == .scan { inputId = env?.videoRecordings.first?.rec.id } else { inputId = scans.first?.asset.id }
-        }
-        .task {
-            if inputId == nil { inputId = kind == .scan ? env?.videoRecordings.first?.rec.id : scans.first?.asset.id }
-            chosenMeasurements = Set((env?.measurementRecordings ?? []).map(\.rec.id))
-        }
-    }
-
-    private func start() {
-        guard let inputId else { return }
-        busy = true
-        Task {
-            let ok = await ws.createRun(env: request.envId, kind: kind, inputId: inputId, recordings: kind == .layout ? Array(chosenMeasurements).sorted() : [],
-                                        settings: settings, label: label)
-            busy = false
-            if ok { dismiss() }
         }
     }
 }

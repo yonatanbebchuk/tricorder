@@ -20,6 +20,11 @@ struct RunRecord: Identifiable, Hashable, Sendable {
 
     var id: String { "\(run.envId)/\(run.id)" }
     var isRunning: Bool { run.status == .running && alive }
+    func previewURL(_ stage: String) -> URL? {
+        guard let p = run.stage(stage).preview else { return nil }
+        let u = dir.appending(path: p)
+        return FileManager.default.fileExists(atPath: u.path) ? u : nil
+    }
 }
 
 struct AssetRecord: Identifiable, Hashable, Sendable {
@@ -78,18 +83,34 @@ struct EnvironmentRecord: Identifiable, Hashable, Sendable {
             ?? recordings.first?.thumbnail
     }
     func runsUsing(recording id: String) -> [RunRecord] { runs.filter { $0.run.inputRecordingIds.contains(id) } }
-    var videoRecordings: [RecordingRecord] { recordings.filter { !$0.isMeasurements } }
+    var videoRecordings: [RecordingRecord] { recordings.filter { $0.rec.kind == "video" } }
+    var photoRecordings: [RecordingRecord] { recordings.filter { $0.rec.isPhotos } }
+    var footageRecordings: [RecordingRecord] { recordings.filter { $0.rec.isFootage } }
     var measurementRecordings: [RecordingRecord] { recordings.filter { $0.isMeasurements } }
+    var models: [AssetRecord] { assets.filter { $0.asset.kind == .model3d } }
     func runsUsing(asset id: String) -> [RunRecord] { runs.filter { $0.run.inputAssetId == id } }
+    /// Chained runs that wait for this run's output.
+    func runsWaiting(on runId: String) -> [RunRecord] { runs.filter { $0.run.waitsFor == runId } }
     /// The asset (if any) a run consumed, for labels and links.
     func inputName(of run: Run) -> String {
         if let r = run.inputRecordingId { return recording(r)?.rec.name ?? r }
+        if let w = run.waitsFor, run.inputAssetId == nil { return "the model from run \(w)" }
         if let a = run.inputAssetId {
             let base = asset(a)?.asset.name ?? a
             let m = run.inputRecordingIds
+            if run.kind == .extend { return base + " + \(m.count) new recording\(m.count == 1 ? "" : "s")" }
             return m.isEmpty ? base + " (scale estimated)" : base + " + \(m.count) measurement\(m.count == 1 ? "" : "s")"
         }
         return "–"
+    }
+    /// Median duration of a stage over this environment's finished runs, for progress estimates.
+    func typicalDuration(of stage: String, kind: RunKind) -> Double? {
+        var d: [Double] = []
+        if stage == "frames" { d = recordings.compactMap { $0.rec.frames.status == .done ? $0.rec.frames.duration : nil } }
+        else { d = runs.filter { $0.run.kind == kind }.compactMap { r in let s = r.run.stage(stage); return s.status == .done ? s.duration : nil } }
+        guard !d.isEmpty else { return nil }
+        let s = d.sorted()
+        return s[s.count / 2]
     }
 }
 
@@ -138,4 +159,16 @@ struct NewRunRequest: Identifiable, Hashable, Sendable {
     var kind: RunKind = .scan
     var inputId: String? = nil
     var id: String { "\(envId)/\(kind.rawValue)/\(inputId ?? "")" }
+}
+
+/// A draggable input for the run builder: "video:rec1", "model3d:model3d-1" …
+struct InputRef: Hashable, Sendable, Identifiable {
+    let kind: InputKind
+    let id: String
+    var token: String { "\(kind.rawValue):\(id)" }
+    init(kind: InputKind, id: String) { self.kind = kind; self.id = id }
+    init?(token: String) {
+        guard let i = token.firstIndex(of: ":"), let k = InputKind(rawValue: String(token[..<i])) else { return nil }
+        kind = k; id = String(token[token.index(after: i)...])
+    }
 }

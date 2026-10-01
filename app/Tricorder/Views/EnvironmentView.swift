@@ -24,7 +24,7 @@ struct EnvironmentView: View {
                 ToolbarItemGroup(placement: .primaryAction) {
                     Button("Add Recording", systemImage: "video.badge.plus") { ws.requestNewRecording(env: record.id) }
                     Button("New Run", systemImage: "play.fill") { ws.requestNewRun(env: record.id) }
-                        .disabled(record.videoRecordings.isEmpty)
+                        .disabled(record.recordings.isEmpty && record.assets.isEmpty)
                     Button("Show in Finder", systemImage: "folder") { ws.reveal(record.dir) }
                     Menu {
                         Button("Rename…") { nameFocused = true }
@@ -112,7 +112,7 @@ struct EnvironmentView: View {
     private var runs: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionTitle(title: "Runs", subtitle: "every processing job, newest first, each linked to the asset it made") {
-                Button("New Run…", systemImage: "play.fill") { ws.requestNewRun(env: record.id) }.buttonStyle(.borderless).disabled(record.recordings.isEmpty)
+                Button("New Run…", systemImage: "play.fill") { ws.requestNewRun(env: record.id) }.buttonStyle(.borderless).disabled(record.recordings.isEmpty && record.assets.isEmpty)
             }
             Card("") { RunsTable(env: record, runs: record.runs.reversed()) }
         }
@@ -270,7 +270,7 @@ struct RecordingRows: View {
                             } else if let t = r.thumbnail {
                                 FileImage(url: t, maxPixel: 400).aspectRatio(contentMode: .fill)
                             } else {
-                                Rectangle().fill(.quaternary).overlay { Image(systemName: "video").foregroundStyle(.secondary) }
+                                Rectangle().fill(.quaternary).overlay { Image(systemName: r.rec.inputKind.symbol).foregroundStyle(.secondary) }
                             }
                         }
                         .frame(width: 96, height: 64).clipShape(RoundedRectangle(cornerRadius: 6)).clipped()
@@ -281,7 +281,7 @@ struct RecordingRows: View {
                                      + " · used by \(env.runsUsing(recording: r.rec.id).count) layout\(env.runsUsing(recording: r.rec.id).count == 1 ? "" : "s")")
                                     .font(.caption).foregroundStyle(.secondary)
                             } else {
-                                Text("\(r.rec.source.fileName) · \(Format.videoLine(r.rec.source))").font(.caption).foregroundStyle(.secondary)
+                                Text((r.rec.isPhotos ? "photos" : r.rec.source.fileName) + " · \(Format.videoLine(r.rec.source))").font(.caption).foregroundStyle(.secondary)
                                 HStack(spacing: 6) {
                                     StatusPill(status: r.rec.frames.status, compact: true)
                                     Text(Format.stageMetrics("frames", r.rec.frames.metrics)).font(.caption).foregroundStyle(.secondary)

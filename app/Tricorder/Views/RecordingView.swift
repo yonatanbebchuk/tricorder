@@ -109,8 +109,8 @@ struct VideoRecordingView: View {
             .navigationSubtitle(Format.videoLine(rec.source))
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
-                    Button("Scan", systemImage: "play.fill") { ws.requestNewRun(env: env.id, kind: .scan, inputId: rec.id) }
-                        .help("Start an environment scan on this recording")
+                    Button(rec.isPhotos ? "Extend" : "Scan", systemImage: "play.fill") { ws.requestNewRun(env: env.id, kind: rec.isPhotos ? .extend : .scan, inputId: rec.id) }
+                        .help(rec.isPhotos ? "Register these photos into a 3D model" : "Start an environment scan on this recording")
                     Button("Show in Finder", systemImage: "folder") { ws.reveal(record.dir) }
                     Menu {
                         Button("Open Video") { ws.openFile(videoURL) }
@@ -151,7 +151,7 @@ struct VideoRecordingView: View {
             }
             VStack(alignment: .leading, spacing: 12) {
                 SectionTitle(title: "Runs on this recording") {
-                    Button("Scan…", systemImage: "play.fill") { ws.requestNewRun(env: env.id, kind: .scan, inputId: rec.id) }.buttonStyle(.borderless)
+                    Button(rec.isPhotos ? "Extend…" : "Scan…", systemImage: "play.fill") { ws.requestNewRun(env: env.id, kind: rec.isPhotos ? .extend : .scan, inputId: rec.id) }.buttonStyle(.borderless)
                 }
                 Card("") { RunsTable(env: env, runs: runs) }
             }
@@ -192,7 +192,7 @@ struct VideoRecordingView: View {
                     Text(rec.id).font(Theme.mono).foregroundStyle(.secondary)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(rec.source.fileName).foregroundStyle(.secondary)
+                    Text(rec.isPhotos ? "photos folder" : rec.source.fileName).foregroundStyle(.secondary)
                     Text(Format.videoLine(rec.source) + (rec.source.size.map { " · \(Format.size($0))" } ?? "")).foregroundStyle(.secondary)
                     Text("recorded into \(env.env.name) · \(Format.when(rec.createdAt))").foregroundStyle(.secondary)
                 }

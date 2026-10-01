@@ -1,5 +1,14 @@
 import Foundation
 
+/// One run of a recipe: its kind, the ids in each input slot, settings; `after` chains it onto another run.
+struct RunStep: Sendable, Hashable {
+    var kind: RunKind
+    var inputs: [String: [String]]
+    var settings: RunSettings
+    var label: String
+    var after: String? = nil
+}
+
 struct PipelineError: LocalizedError, Sendable {
     let message: String
     init(_ message: String) { self.message = message }
@@ -81,11 +90,29 @@ enum Pipeline {
 
     /// Create a run and start it detached. `recordings` are the measurement recordings of a layout.
     static func createRun(root: URL, envId: String, kind: RunKind, inputId: String, recordings: [String] = [], settings: RunSettings, label: String) async throws -> String {
-        var input = kind == .scan ? ["--recording", inputId] : ["--asset", inputId]
-        if kind == .layout, !recordings.isEmpty { input += ["--recordings"] + recordings }
-        let out = try await run(root: root, ["new-run", envId, kind.rawValue] + input + settingsArgs(settings, label: label))
+        let key = kind == .scan ? "recording" : "asset"
+        return try await createRun(root: root, envId: envId,
+                                   step: RunStep(kind: kind, inputs: [key: [inputId], "recordings": recordings], settings: settings, label: label))
+    }
+
+    /// Create a run from a recipe step (inputs by slot key); start it unless it is chained onto a run still working.
+    static func createRun(root: URL, envId: String, step: RunStep, start: Bool = true) async throws -> String {
+        var args = ["new-run", envId, step.kind.rawValue]
+        for slot in step.kind.slots {
+            let ids = step.inputs[slot.key] ?? []
+            guard !ids.isEmpty else { continue }
+            args += slot.isSingle ? ["--\(slot.key)", ids[0]] : ["--\(slot.key)"] + ids
+        }
+        if let a = step.after { args += ["--after", a] }
+        let out = try await run(root: root, args + settingsArgs(step.settings, label: step.label))
         guard let id = ids(out)["run"] else { throw PipelineError("no run id returned") }
-        try await start(root: root, envId: envId, runId: id)
+        if start { try await self.start(root: root, envId: envId, runId: id) }
+        return id
+    }
+
+    static func createPhotosRecording(root: URL, envId: String, files: [URL], name: String) async throws -> String {
+        let out = try await run(root: root, ["new-recording", envId] + files.map(\.path) + ["--name", name])
+        guard let id = ids(out)["recording"] else { throw PipelineError("no recording id returned") }
         return id
     }
 

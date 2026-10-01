@@ -57,6 +57,10 @@ enum Format {
             if let r = m.int("registered") { p.append("\(r)" + (m.int("images").map { " / \($0)" } ?? "") + " registered") }
             if let s = m.int("submodels"), s > 0 { p.append("\(s) model\(s > 1 ? "s" : "")") }
             if let e = m.double("reproj_px") { p.append(String(format: "%.2f px", e)) }
+        case "register":
+            if let r = m.int("new_registered") { p.append("\(r)" + (m.int("new_images").map { " / \($0)" } ?? "") + " new registered") }
+            if let r = m.int("registered") { p.append("\(r) total") }
+            if let e = m.double("reproj_px") { p.append(String(format: "%.2f px", e)) }
         case "dense":
             if let d = m.double("dense_points"), d > 0 { p.append(String(format: "%.1fM pts", d / 1e6)) }
             if let f = m.double("faces"), f > 0 { p.append(String(format: "%.1fM faces", f / 1e6)) }
@@ -85,10 +89,12 @@ enum Format {
         return p.joined(separator: " · ")
     }
 
-    static func settingsLine(_ run: Run) -> String {
-        let s = run.settings
-        switch run.kind {
+    static func settingsLine(_ run: Run) -> String { settingsLine(kind: run.kind, run.settings) }
+
+    static func settingsLine(kind: RunKind, _ s: RunSettings) -> String {
+        switch kind {
         case .scan: return "\(s.features)+\(s.matcher == "LIGHTGLUE" ? "LightGlue" : "BF") · \(s.matching) · dense L\(s.resLevel) · \(s.measures) meas."
+        case .extend: return "\(s.features)+\(s.matcher == "LIGHTGLUE" ? "LightGlue" : "BF") · dense L\(s.resLevel) · \(s.measures) meas."
         case .layout: return "\(s.pxPerM) px/m · contours \(number(s.contourM)) m · 1:\(s.sheetScale)"
         }
     }
@@ -100,6 +106,7 @@ enum Format {
         switch a.kind {
         case .model3d:
             if let r = m.int("registered") { t.append(("\(r)" + (m.int("images").map { " / \($0)" } ?? ""), "frames registered")) }
+            if let n = m.int("new_registered"), n > 0 { t.append(("\(n)", "new frames added")) }
             if let d = m.double("dense_points"), d > 0 { t.append((String(format: "%.1fM", d / 1e6), "dense points")) }
             if let f = m.double("faces"), f > 0 { t.append((String(format: "%.1fM", f / 1e6), "mesh faces")) }
             if let p = m.int("prompts") { t.append(("\(p)", "measurement prompts")) }
@@ -115,6 +122,7 @@ enum Format {
 
     static func videoLine(_ v: VideoInfo) -> String {
         var p: [String] = []
+        if let c = v.count { p.append("\(c) photos") }
         if let d = v.durationS, d > 0 { p.append(duration(d)) }
         if let w = v.width, let h = v.height { p.append("\(w)×\(h)") }
         if let f = v.fps, f > 0 { p.append("\(Int(f.rounded())) fps") }
@@ -124,7 +132,7 @@ enum Format {
 
     static func warnings(recording: Recording?, run: Run) -> [String] {
         var w: [String] = []
-        let f = recording?.frames.metrics ?? [:], s = run.stage("sfm").metrics
+        let f = recording?.frames.metrics ?? [:], s = run.stage(run.kind == .extend ? "register" : "sfm").metrics
         if let images = f.int("images"), let reg = s.int("registered"), images > 0, Double(reg) < 0.6 * Double(images) {
             let sub = s.int("submodels") ?? 0
             w.append("Only \(reg) of \(images) frames registered" + (sub > 1 ? " and COLMAP split the walk into \(sub) pieces" : "")

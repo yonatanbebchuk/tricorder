@@ -206,7 +206,7 @@ def write_pdf(path: Path, ortho_png: Path, ortho: dict, cont, foot, meas, title:
                   and (w + 3) * 1000 / s <= avail_w and (h + 3) * 1000 / s <= avail_h), 1000)
     mm = 1000.0 / scale                                     # mm on paper per metre
     pdf = PdfPages(str(path))
-    for page in ("ortho", "lines"):
+    for n, page in enumerate(("ortho", "lines")):
         if page == "lines" and not linework:
             continue
         fig = plt.figure(figsize=(A2[0] / 25.4, A2[1] / 25.4))
@@ -218,6 +218,7 @@ def write_pdf(path: Path, ortho_png: Path, ortho: dict, cont, foot, meas, title:
         ax.set_xlim(x0 - 1.5, x1 + 1.5); ax.set_ylim(y0 - 1.5, y1 + 1.5); ax.set_aspect("equal"); ax.axis("off")
         draw_page(fig, ax, page, ortho_png, ortho, cont, foot, meas, linework, title, sub, scale, mm, A2)
         pdf.savefig(fig)
+        fig.savefig(str(path.with_name(f"site_plan_page{n + 1}.png")), dpi=60)   # the sheet as a picture (app previews)
         plt.close(fig)
     pdf.close()
     return scale

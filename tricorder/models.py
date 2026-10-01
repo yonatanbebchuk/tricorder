@@ -8,8 +8,9 @@ work/environments/<env>/runs/<run>/logs/<stage>.log
 work/environments/<env>/runs/<run>/                      working files (database.db, sparse/, dense/, measure/, ...)
 work/environments/<env>/assets/<asset>/asset.json        a deliverable made by a run (3D model, site plan); its files live next to it
 
-A run consumes either a recording (scan) or an earlier asset (layout) and publishes exactly one asset.
+A run consumes recordings and/or earlier assets through its kind's input *slots* and publishes exactly one asset.
 Assets are immutable: running again publishes a new asset and the earlier ones stay as history.
+Runs can be chained: a run whose input names another run's output ("@r5") waits for that run and is launched by it.
 Everything here is private, local data; work/ is git-ignored.
 """
 from __future__ import annotations
@@ -28,14 +29,31 @@ ENVS = ROOT / "work" / "environments"
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 VIDEO_EXT = {".mov", ".mp4", ".m4v", ".mkv", ".avi"}
 
+# A run kind is a recipe: input slots (what it consumes, by recording / asset kind), stages, one output asset kind.
+# Slot keys are the keys of Run.inputs: a single-valued slot holds an id, a multi-valued one a list of ids.
 RUN_KINDS: dict[str, dict[str, Any]] = {
-    "scan": {"label": "Environment scan", "input": "recording", "output": "model3d",
-             "stages": ["sfm", "dense", "landmarks", "preview"]},
-    "layout": {"label": "Layout", "input": "model3d", "output": "site_plan", "stages": ["solve", "ortho", "trace", "draw", "preview"]},
+    "scan": {"label": "Environment scan", "output": "model3d", "stages": ["sfm", "dense", "landmarks", "preview"],
+             "slots": [{"key": "recording", "label": "Video", "accepts": ["video"], "min": 1, "max": 1}],
+             "blurb": "A filmed walk becomes a textured 3D model: COLMAP poses, OpenMVS dense cloud, mesh, texture."},
+    "extend": {"label": "Extend scan", "output": "model3d", "stages": ["register", "dense", "landmarks", "preview"],
+               "slots": [{"key": "asset", "label": "3D model", "accepts": ["model3d"], "min": 1, "max": 1},
+                         {"key": "recordings", "label": "New footage", "accepts": ["video", "photos"], "min": 1, "max": 8}],
+               "blurb": "New videos or photos are registered into an existing model's cameras; everything is re-optimised and re-meshed."},
+    "layout": {"label": "Layout", "output": "site_plan", "stages": ["solve", "ortho", "trace", "draw", "preview"],
+               "slots": [{"key": "asset", "label": "3D model", "accepts": ["model3d"], "min": 1, "max": 1},
+                         {"key": "recordings", "label": "Measurements", "accepts": ["measurements"], "min": 0, "max": 8}],
+               "blurb": "A 3D model plus tape measurements becomes a site plan: true scale, orthomosaic, wall lines, DXF and PDF."},
+}
+# Chains the app offers as one recipe: each step is a run; a later step's asset slot takes the earlier run's output.
+CHAINS: dict[str, dict[str, Any]] = {
+    "survey": {"label": "Site plan from video", "runs": ["scan", "layout"],
+               "blurb": "Scan, then lay out, in one go. Add measurements now for true scale or later for a re-solve."},
 }
 ASSET_KINDS = {"model3d": "3D Model", "site_plan": "Site Plan"}
-STAGE_LABELS = {"frames": "Frames", "sfm": "COLMAP", "dense": "OpenMVS", "landmarks": "Landmarks", "preview": "Preview",
-                "solve": "Scale & level", "ortho": "Orthomosaic", "trace": "Linework", "draw": "Drawing"}
+RECORDING_KINDS = {"video": "Video", "photos": "Photos", "measurements": "Measurements"}
+STAGE_LABELS = {"frames": "Frames", "sfm": "COLMAP", "register": "Register", "dense": "OpenMVS", "landmarks": "Landmarks",
+                "preview": "Preview", "solve": "Scale & level", "ortho": "Orthomosaic", "trace": "Linework", "draw": "Drawing"}
+IMAGE_EXT = {".jpg", ".jpeg", ".heic", ".heif", ".png", ".dng", ".tif", ".tiff"}
 
 # measure/constraints.json in a layout run (written by scripts/measure_project.py from the measurement recordings,
 # read by scripts/solve_scale.py):
@@ -91,6 +109,8 @@ class Stage:
     metrics: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
     log: str | None = None           # path relative to the owning directory
+    outputs: list[dict[str, Any]] = field(default_factory=list)   # files this stage left behind: {path, label, size}
+    preview: str | None = None       # a small picture of the stage's result, relative to the owning directory
 
     @property
     def duration_s(self) -> float | None:
@@ -190,8 +210,9 @@ class Recording:
     env_id: str
     name: str
     created_at: str
-    kind: str = "video"                          # video | measurements (photos and designs later)
+    kind: str = "video"                          # video | photos | measurements
     source: dict[str, Any] = field(default_factory=dict)   # video: path (relative to ROOT), size, duration_s, width, height, fps, hdr ...
+                                                 # photos: path (the photos/ folder, relative to ROOT), count, size, originals
     frames: Stage = field(default_factory=Stage)
     frame_settings: FrameSettings = field(default_factory=FrameSettings)
     notes: str = ""
@@ -261,8 +282,9 @@ class RunSettings:
 class Run:
     id: str
     env_id: str
-    kind: str                                    # scan | layout
-    inputs: dict[str, Any]                       # scan: {"recording": "rec1"}; layout: {"asset": "model3d-1", "recordings": ["rec2", ...]}
+    kind: str                                    # scan | extend | layout
+    inputs: dict[str, Any]                       # by slot key: scan {"recording": "rec1"}; extend / layout {"asset": "model3d-1", "recordings": [...]}
+                                                 # "@r5" as an asset id means "the asset run r5 publishes" (a chained run)
     created_at: str
     settings: RunSettings = field(default_factory=RunSettings)
     status: str = "queued"                       # queued | running | done | failed | cancelled | interrupted
@@ -272,6 +294,7 @@ class Run:
     stages: dict[str, Stage] = field(default_factory=dict)
     output_asset: str | None = None
     label: str = ""
+    after: str | None = None                     # the run this one waits for (chained); launched when it finishes
 
     def __post_init__(self) -> None:
         for s in RUN_KINDS[self.kind]["stages"]:
@@ -284,6 +307,25 @@ class Run:
     @property
     def stage_names(self) -> list[str]:
         return RUN_KINDS[self.kind]["stages"]
+
+    def recording_ids(self) -> list[str]:
+        """Every recording this run consumes, whichever slot holds it."""
+        ids = []
+        for slot in RUN_KINDS[self.kind]["slots"]:
+            v = self.inputs.get(slot["key"])
+            if slot["accepts"][0] in RECORDING_KINDS:
+                ids += [v] if isinstance(v, str) else list(v or [])
+        return ids
+
+    @property
+    def asset_id(self) -> str | None:
+        return self.inputs.get("asset")
+
+    @property
+    def waits_for(self) -> str | None:
+        """The run whose output this run's asset slot names ("@r5"), if any."""
+        a = self.asset_id
+        return a[1:] if isinstance(a, str) and a.startswith("@") else self.after
 
     def save(self) -> None:
         d = asdict(self)
@@ -330,6 +372,9 @@ class Asset:
     files: list[dict[str, Any]] = field(default_factory=list)   # {path, label, size}
     metrics: dict[str, Any] = field(default_factory=dict)
     notes: str = ""
+    derived_from: str | None = None              # model3d made by an extend run: the model it grew out of
+    sources: list[dict[str, Any]] = field(default_factory=list)   # model3d: the frames it was built from,
+                                                 # [{"recording": "rec1", "prefix": ""}, {"recording": "rec4", "prefix": "rec4/"}]
 
     @property
     def dir(self) -> Path:

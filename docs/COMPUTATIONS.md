@@ -3,7 +3,39 @@
 Design for the three runs Tricorder performs on an environment, the two assets they produce, and how measurement
 works. Decided 2026-09-27: asset names **3D Model** and **Site Plan**; extend scans re-optimise everything (geometry
 over frame stability); 0.25 m contours, 1:100 sheets. Step 1 (vocabulary, constraints file, real site-plan outputs)
-is implemented; steps 2 and 3 are still design.
+and step 3 (extend, photo recordings) are implemented; step 2 (measuring in the viewer) is still design.
+
+## Runs are recipes (2026-09-29)
+
+A run kind is a *recipe*: input **slots** (what it consumes, by recording or asset kind, with counts), **stages**, and
+one output asset kind. `RUN_KINDS` in `tricorder/models.py` is the single definition; the app mirrors it
+(`RunKind.slots`) and builds its "New run" sheet from it: pick a recipe, drag the inputs from the bucket of what the
+environment has into the slots, the stage rail turns from grey to colour when every required slot is filled, start.
+
+| recipe | slots | stages | output |
+|---|---|---|---|
+| Environment scan | video ×1 | frames · sfm · dense · landmarks · preview | 3D Model |
+| Extend scan | 3D model ×1 · new footage (video or photos) ×1–8 | frames (per new recording) · register · dense · landmarks · preview | 3D Model (`derived_from` the input) |
+| Layout | 3D model ×1 · measurements ×0–8 | solve · ortho · trace · draw · preview | Site Plan |
+| Site plan from video | video ×1 · measurements ×0–8 | a *chain*: a scan run, then a layout run | Site Plan (and the 3D Model on the way) |
+
+**Chains.** "Site plan from video" is not a fourth run kind: the ontology stays *one run publishes one asset*. The app
+creates two runs; the layout's asset slot holds `@r5` (the output of run r5) and the run is `queued`. When r5
+publishes, `pipeline.py` launches every queued run that waits for it (`_launch_dependants`); at start the `@r5` is
+resolved to the real asset id. The run page shows the chain ("after scan r5" / "then layout r6").
+
+**Photos are recordings** (kind `photos`): a folder of stills copied into the environment; the frames stage converts
+them (HEIC through `sips`), caps the long side, scores sharpness, and writes the same `frames.csv` a video gets. Only an
+extend scan takes them (a photo set alone rarely has the overlap a scan needs; that can change).
+
+**Every stage records what it left behind.** `Stage.outputs` lists the files (from `STAGE_OUTPUTS`) with sizes and
+labels, and `Stage.preview` names a small picture rendered right after the stage by `tricorder/previews.py`: the
+sparse cloud with the camera path (sfm, register), a sub-sample of the dense cloud (dense), the levelled plan
+(landmarks), the measurement residuals (solve), the orthomosaic (ortho), the walls and the dimensioned boundary over
+it (trace), the PDF sheet (draw). The app's run page is built on these: a progress bar whose segments are sized by
+how long each stage usually takes in that environment (median of past runs, else a typical figure), a milestone at
+every stage boundary, a card per stage with its preview, numbers and files, and the log only on request (⌘L).
+`python -m tricorder.previews <env> <run>` renders them for runs made before this existed.
 
 ## Vocabulary
 
@@ -34,7 +66,7 @@ Runs (a run consumes recordings and/or assets and publishes one asset):
 | **Extend scan** | `extend` | a 3D model + one or more new recordings (video or photos) | a new 3D model | frames, register, dense, landmarks, preview |
 | **Layout** | `layout` | a 3D model + measurement recordings | site plan | solve, ortho, trace, draw, preview |
 
-`scan` and `layout` exist; `extend` is design.
+All three exist. `extend` is `scripts/02b_register.sh` inside the `register` stage (below).
 
 ## 1. Environment scan (video → 3D model)
 
@@ -67,17 +99,25 @@ constraint *points* can be re-projected into the new frame via their frames' new
 as suggestions). Time is acceptable; geometry is what matters.
 
 1. *frames*: extract frames from each new recording (photos: convert HEIC → JPEG, cap the long side).
-2. *register*: copy the mesh asset's `database.db` and `sparse/` into the run; `feature_extractor` on the new
-   images only (same feature type as the original, it is recorded in the asset); `vocab_tree_matcher` of the new
-   images against **all** images plus `sequential_matcher` within each new video; `image_registrator` to pose the
-   new images into the existing model; `point_triangulator` for the new tracks; a full `bundle_adjuster` over old
-   and new images; `image_undistorter` for the union.
+2. *register* (`scripts/02b_register.sh`, implemented 2026-09-29): the run's `images/` is the union, the parent's
+   frames under the names its database knows (flat) and each new recording's frames under `<rec>/`; the parent
+   asset's `database.db` and `sparse/0` are APFS-cloned into the run; `feature_extractor` on the new images only
+   (`--image_list_path`, one camera per recording folder, **the parent's feature type**: its database and vocab
+   index are SIFT or ALIKED, not both, so the run's features setting is overwritten from the parent's run);
+   `sequential_matcher` over the whole set (COLMAP skips pairs already matched) and `vocab_tree_matcher` of the new
+   images against everything (`--match_list_path`); `image_registrator` poses the new images in the parent's frame;
+   `point_triangulator`; a full `bundle_adjuster`; `image_undistorter` for the union. Result in `sparse/0`.
 3. *dense*: OpenMVS on the union, all depth maps recomputed (the poses moved); mesh, clean and texture.
 4. *landmarks* and *preview* as in a scan.
 
-Output: `model3d-2`, with `derived_from: model3d-1`. Measurements from the parent are re-projected into the new
-frame through their frames' new poses and offered as suggestions to confirm. Quality metrics on the run: registered new frames, new dense points, mesh faces before /
-after, and a coverage number (fraction of the previous footprint that got a second look).
+Output: `model3d-2`, with `derived_from: model3d-1` and `sources` naming every recording and the name prefix its
+frames carry in the database (so a further extend, and snapshot measuring, find the right images). Measurement
+items still refer to (recording, frame); `measure_project.py` looks frames up by database name, so items on the
+parent's video keep working on the extended model; items on the new footage need the prefix (to do).
+Metrics on the register stage: `new_images`, `new_registered`, total `registered`, reprojection error.
+
+Smoke test (2026-09-29, Basement test, ALIKED model, 5 of its own frames re-imported as a photos recording): register
+3 min (4 of the 5 registered, 282 → 286 images, 1.21 px), then the usual dense / landmarks / preview.
 
 If the user wants a *cleaner* mesh from the same footage (other features, other dense level), that is simply a
 new `scan` run; it produces a new frame and the measurements do not carry over.
@@ -166,6 +206,40 @@ the image, both in metres), and offers Open in QCAD / Blender / Preview.
    the layout run, constraints file with sources, app overlay of contours and measurement lines.
 2. **Measure in the viewer and on snapshots**: hit-test picking in SceneKit, pixel-to-mesh raycasting helper
    (`python -m tricorder.measure project <asset> <frame> <u> <v>`), the measurement list UI with residuals.
-3. **Extend scan**: incremental registration with fixed old poses, depth-map reuse, photo recordings,
-   `derived_from` chains and measurement inheritance.
+3. **Extend scan**: done (2026-09-29) as designed in B, except that measurement inheritance across the prefix is still to do.
+4. **An accurate site plan**: see the next section.
+
+## 4. Towards an accurate site plan (2026-09-29)
+
+The current boundary comes from the *ground footprint* (where the dense cloud has points within 0.35 m of the ground),
+regularised and snapped to the detected walls. That is why it looks wrong where the cloud is incomplete: under the
+canopy along the house, in the side passages, wherever the walk did not look. The walls themselves (vertical
+surfaces → RANSAC lines) are right where they exist: the three fence sides of the backyard come out as single
+straight segments at the site axis with lengths that agree with the tape.
+
+Tried today: a **wall-first boundary** (`wall_first_boundary` in `10_trace_walls.py`): keep the walls that run
+along the footprint's outline (within 1.2 m, within 30° of its tangent, at least 1.5 m long), order them around the
+yard, join consecutive walls at the intersection of their lines when they meet at an angle, with a perpendicular jog
+when they are parallel and offset, and follow the ground's outline only across long gaps that the outline does not
+detour around. On the backyard it gives 13 sides instead of 17 and gets the three fence sides exactly (19.09 m,
+11.07 m, 6.17 m) but draws diagonals across the house side and the passage, where the walls are short pieces
+(porch, bay window, gate posts) and the footprint fills in. It is written to `linework.json` as `wall_boundary` next
+to the footprint boundary (`polygons[0]`, still the one drawn), so the two can be compared on other sites.
+
+What a human does when tracing is two things: geometry (where is the line: solved) and *semantics* (which lines are
+the perimeter, which jog is a bay window and which is a hole in the data). The plan to close the gap:
+
+1. **Label the walls** with the identify prototype (`12_identify.py`: Grounding DINO + SAM lifted through the poses):
+   each wall segment gets a label (fence, house, hedge, shed, gate) from the masks that hit it. The perimeter is then
+   the chain of *fence* and *house* segments; a *gate* segment bridges a gap in a fence; nothing inside counts.
+2. **Close the house side from the facade**, not the ground: the house facade is a tall vertical surface (3 m) with
+   short jogs (porch, bay); a dedicated pass with `--min-height 2.0` finds it as one polyline with jogs.
+3. **Edit in the app**: a plan editor over the orthomosaic with the candidate walls faint underneath and snapping
+   to them; drag a vertex, delete a side, add a line. Edits are saved with the site plan asset
+   (`linework_edits.json`) and the draw stage re-runs from them. The geometry underneath is metric, so a hand-traced
+   plan is exact; the automatic tracer is a first draft that gets closer each time.
+
+Direct "video → 2D map" without the 3D model is not a shortcut worth taking: the plan's accuracy comes from the
+poses and the dense geometry, and no image-only model is metric or knows the yard's fences. The "Site plan from
+video" recipe gives the one-step experience on top of the same computation.
 

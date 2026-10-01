@@ -11,15 +11,18 @@ Open source end to end, runs on an Apple Silicon Mac, no NVIDIA GPU.
 |---|---|
 | ![Home: every environment with its latest plan](docs/home.png) | ![Environment page: current assets, runs, recordings](docs/environment.png) |
 | *Home: every place you have scanned* | *An environment: what it is now, how it got there, what was sensed* |
-| ![A run: input, stages, output, live log](docs/run.png) | ![A recording: the video, its frames, the runs on it](docs/recording.png) |
-| *A run: what went in, the stages, what came out* | *A recording: the raw footage, its frames, every run on it* |
+| ![A run: inputs, a progress rail with a milestone per stage, a card per stage with its preview and files](docs/run.png) | ![A recording: the video, its frames, the runs on it](docs/recording.png) |
+| *A run: inputs → stages → output, a preview and the files of every stage, the log on request* | *A recording: the raw footage, its frames, every run on it* |
 
 ---
 
 ## How it works
 
-Two kinds of run. A **scan** turns a video into a 3D model. A **layout** turns a 3D model plus tape measurements
-into a site plan. Everything is a stage script under `scripts/`, orchestrated by `tricorder/pipeline.py`.
+Three kinds of run, each a recipe with input slots. A **scan** turns a video into a 3D model. An **extend scan**
+registers new videos or photos into an existing 3D model and re-meshes it. A **layout** turns a 3D model plus tape
+measurements into a site plan. "Site plan from video" chains a scan and a layout. Everything is a stage script under
+`scripts/`, orchestrated by `tricorder/pipeline.py`; every stage leaves a preview picture and a file list behind,
+which is what the app's run page shows.
 
 ```
  iPhone video (4K, 30 fps)
@@ -91,8 +94,8 @@ An **environment** is a place you scan. It holds three things, all local and git
 
 | | what | where |
 |---|---|---|
-| **Recordings** | raw sensed data: an iPhone video (copied in, its metadata, the frames extracted from it), or a set of tape measurements marked on a video's frames | `work/environments/<env>/recordings/<rec>/` |
-| **Runs** | processing jobs. A **scan** turns a video recording into a 3D model; a **layout** turns a 3D model plus measurement recordings into a site plan. A run has stages, logs, settings and working files, and publishes exactly one asset | `work/environments/<env>/runs/<run>/` |
+| **Recordings** | raw sensed data: an iPhone video (copied in, its metadata, the frames extracted from it), a set of photos, or tape measurements marked on a video's frames | `work/environments/<env>/recordings/<rec>/` |
+| **Runs** | processing jobs, each a recipe with input slots. A **scan** turns a video recording into a 3D model; an **extend scan** registers new videos or photos into a 3D model and re-meshes it; a **layout** turns a 3D model plus measurement recordings into a site plan. A run has stages (each with its metrics, files and a preview picture), logs, settings and working files, and publishes exactly one asset. A run can wait for another's output (`@r5`) and is launched when it publishes: that is how "Site plan from video" chains a scan and a layout | `work/environments/<env>/runs/<run>/` |
 | **Assets** | what runs produce: a **3D Model** (`model3d`) or a **Site Plan** (`site_plan`). Files are APFS clones of the run's deliverables, so an asset costs no extra disk | `work/environments/<env>/assets/<asset>/` |
 
 Assets are never overwritten: laying out again publishes `site_plan-2` and `site_plan-1` stays as history. The
@@ -120,8 +123,11 @@ A native SwiftUI app (macOS 26). The sidebar lists environments, each with *Reco
 environment page shows the current assets on top (the 3D model in an orbitable SceneKit viewer, the site plan as an
 image), then every run linked to the asset it made, then the recordings. A 3D Model page has the viewer, the metrics,
 and *Lay Out Site Plan*; a Site Plan page draws the boundary, walls, contours, grid and measurements over the
-orthomosaic, lets you rotate the plan to align with any edge, and opens the DXF and PDF; a run page has the stage
-chips and the live log.
+orthomosaic, lets you rotate the plan to align with any edge, and opens the DXF and PDF. A run page is the pipeline:
+inputs → a progress bar with a milestone per stage (segments sized by how long each stage usually takes in that
+environment) → output, a card per stage with a preview of what it produced, its numbers and files, and the log on
+request (⌘L). *New run* is a builder: pick a recipe, drag the inputs from the environment's recordings and assets
+into its slots, and the stage rail turns from grey to colour when every required slot is filled.
 
 The app watches `work/environments` with FSEvents and starts work through `python -m tricorder.pipeline launch …`
 (detached, under `caffeinate`), so quitting the app never kills a run. On first launch it asks for the checkout
@@ -141,6 +147,10 @@ make layout ENV=backyard ASSET=model3d-1 MEAS="rec2 rec3"       # site plan; omi
 make list                                                       # environments, recordings, runs, assets
 python -m tricorder.pipeline new-run backyard scan --recording rec1 --features ALIKED --matcher LIGHTGLUE --start
 python -m tricorder.pipeline new-recording backyard data/evening.MOV --name "Evening walk"
+python -m tricorder.pipeline new-recording backyard data/shed-photos/ --name "Shed close-ups"   # a photos recording
+python -m tricorder.pipeline new-run backyard extend --asset model3d-1 --recordings rec3 --start   # register them into the model
+python -m tricorder.pipeline new-run backyard layout --asset @r5 --recordings rec2            # chained: runs when r5 publishes
+python -m tricorder.previews backyard r1                                                       # stage previews for an older run
 python -m tricorder.pipeline new-measurements backyard --name "Tape, Saturday"   # then add items in the app
 make migrate                                                    # old work/scans layout -> work/environments
 ```
@@ -221,6 +231,17 @@ Measured on a 286-frame basement test (white walls, soft frames):
 On a 434 s, 600-frame backyard walk with the default settings: 600 of 600 registered in one model, COLMAP 75 min,
 dense 40 min, texturing 14 min after decimation.
 
+## The extend run
+
+Input: a 3D Model asset and one or more new recordings (videos or photos). Output: a new 3D Model asset, marked as
+derived from the input. **register** (`02b_register.sh`) clones the parent's COLMAP database and poses, extracts
+features for the new frames only (the parent's feature type; one camera per recording), matches them against
+everything (sequential plus vocab-tree retrieval), poses them with `image_registrator`, triangulates their tracks,
+and runs a full bundle adjustment over old and new; then **dense**, **landmarks** and **preview** as in a scan. The
+asset records which recordings its frames came from and the name prefix each has in the database, so a further
+extend and snapshot measuring find the right images. Photos (`01b_import_photos.py`) are converted from HEIC with
+`sips`, capped at 4032 px and sharpness-scored like video frames.
+
 ## The layout run
 
 Input: a 3D Model asset and zero or more measurement recordings. Output: a Site Plan asset.
@@ -243,7 +264,10 @@ Input: a 3D Model asset and zero or more measurement recordings. Output: a Site 
    rasterised and traced as the boundary polygon, which always closes across gates and porches; it is simplified,
    regularised to the direction families, jogs shorter than `min_edge_m` (1.2 m) absorbed unless a detected wall
    supports them, and every side snapped onto its wall line. Loops the walls close on their own (a shed, a raised
-   bed) become enclosures via shapely and buildingregulariser. Every side carries its length. Output `linework.json`.
+   bed) become enclosures via shapely and buildingregulariser. Every side carries its length. Output `linework.json`,
+   which also holds `wall_boundary`: the same outline traced from the perimeter walls themselves (chained corner to
+   corner, the ground only across gaps). It gets the fence sides exactly and the house side wrong, so it is kept
+   for comparison, not drawn; the plan to close that gap is in `docs/COMPUTATIONS.md` §4.
 4. **draw** (`08_site_plan.py`): DEM on a 5 cm grid (`dem.tif`, 32-bit metres), contour lines at `contour_m`
    (0.25 m, index contours every fourth), footprint, the ESRI world file `orthomosaic.pgw`, `site_plan.dxf` and a
    two-page `site_plan.pdf` at 1:100 on A2 (or the largest of 1:50 / 100 / 200 / 500 that fits): the orthomosaic
@@ -323,7 +347,7 @@ Both are described, with results on the backyard, in the second part of
 ## Repository layout
 
 ```
-tricorder/      data model (models.py), orchestrator (pipeline.py), stage metrics, migration
+tricorder/      data model (models.py), orchestrator (pipeline.py), stage metrics and previews, migration
 scripts/        the stage scripts, numbered in pipeline order, plus helpers
 app/            the Mac app (SwiftUI); project.yml is the XcodeGen spec
 docs/           design notes, research, screenshots

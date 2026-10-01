@@ -2,7 +2,8 @@
 """Architect's line drawing from the 3D model: vertical surfaces → 2D lines → regularized, dimensioned polygons.
 
 Reads  <work>/scene_dense_metric.ply   (metres, Z up = levelled ground at z ≈ 0, north +Y)
-Writes <work>/linework.json  {"axis_deg", "walls": [[[x,y],[x,y]], ...], "polygons": [{"points": [...], "lengths": [...], "area"}]}
+Writes <work>/linework.json  {"axis_deg", "walls": [[[x,y],[x,y]], ...], "polygons": [{"points": [...], "lengths": [...], "area"}],
+                              "wall_boundary": [the same, traced from the perimeter walls rather than the ground footprint]}
 
 Steps (all classical, seconds on an M4):
   1. Down-sample to 4 cm, estimate normals.  Points whose normal is nearly horizontal and that sit between 0.25 m and
@@ -473,6 +474,118 @@ def collapse_short_edges(poly, min_edge: float = 0.9, passes: int = 4, walls=())
     return Polygon(xy).buffer(0)
 
 
+def perimeter_walls(walls, ring, max_dist: float = 1.2, min_len: float = 1.0, ang_tol: float = 30.0):
+    """The walls that run along the ground footprint's outline, oriented and ordered around it: the yard's perimeter.
+    A detected wall that sits well inside the footprint (a raised bed, the sandbox) or crosses the outline at a right
+    angle (a fence stub, a step) is not part of the perimeter."""
+    from shapely.geometry import Point
+    L = ring.length
+    out = []
+    for w in walls:
+        a, b = np.array(w[0], float), np.array(w[1], float)
+        length = float(np.linalg.norm(b - a))
+        if length < min_len:
+            continue
+        mid = (a + b) / 2
+        if ring.distance(Point(mid)) > max_dist:
+            continue
+        t = ring.project(Point(mid))
+        p0, p1 = ring.interpolate((t - 0.6) % L), ring.interpolate((t + 0.6) % L)
+        tang = np.array([p1.x - p0.x, p1.y - p0.y])
+        if np.linalg.norm(tang) < 1e-6:
+            continue
+        u = (b - a) / length
+        if np.degrees(np.arccos(min(1.0, abs(u @ tang) / np.linalg.norm(tang)))) > ang_tol:
+            continue
+        ta, tb = ring.project(Point(a)), ring.project(Point(b))
+        if (tb - ta) % L > L / 2:                     # walk the wall the way the ring runs
+            a, b, ta, tb = b, a, tb, ta
+        out.append({"a": a, "b": b, "t": t, "ta": ta, "tb": tb, "len": length})
+    out.sort(key=lambda w: w["t"])
+    return out
+
+
+def ring_section(ring, t0: float, t1: float, step: float = 0.5, simplify: float = 0.8):
+    """Points of the ring from arc position t0 to t1 (forward, wrapping), simplified so a bridge has few vertices."""
+    from shapely.geometry import LineString
+    L = ring.length
+    span = (t1 - t0) % L
+    n = max(2, int(span / step))
+    pts = [ring.interpolate((t0 + span * k / n) % L).coords[0] for k in range(0, n + 1)]
+    if len(pts) < 3:
+        return []
+    simp = list(LineString(pts).simplify(simplify).coords)
+    return [np.array(q) for q in simp[1:-1]]
+
+
+def wall_first_boundary(foot, walls, fams, min_edge: float, min_angle: float = 25.0, max_ext: float = 3.0, straight_gap: float = 3.0):
+    """The boundary an architect would trace: the perimeter walls themselves, joined at their corners. Where two
+    consecutive walls meet at an angle their lines are intersected; near-parallel neighbours are joined by a jog;
+    a long stretch with no wall (a hedge, a gap in coverage) is bridged with the ground footprint's outline.
+    Returns (polygon, perimeter wall count) or (None, n) when there is not enough wall to go around."""
+    from shapely.geometry import LineString, Polygon
+    ring = LineString(list(foot.simplify(0.3).exterior.coords))
+    pw = perimeter_walls(walls, ring, min_len=1.5)
+    if len(pw) < 3:
+        return None, len(pw)
+    n = len(pw)
+    # first pass: which walls get a real corner with their predecessor (then their own start point is not needed)
+    for i in range(n):
+        w, nx = pw[i], pw[(i + 1) % n]
+        u1 = (w["b"] - w["a"]) / max(w["len"], 1e-9)
+        u2 = (nx["b"] - nx["a"]) / max(nx["len"], 1e-9)
+        if np.degrees(np.arccos(min(1.0, abs(u1 @ u2)))) >= min_angle:
+            t, s_ = np.linalg.solve(np.array([u1, -u2]).T, nx["a"] - w["b"])
+            x = w["b"] + t * u1
+            if np.linalg.norm(x - w["b"]) <= max_ext and np.linalg.norm(x - nx["a"]) <= max_ext:
+                pw[(i + 1) % n]["a_used"] = True
+    # second pass: the vertices in order
+    pts = []
+    for i in range(n):
+        w, nx = pw[i], pw[(i + 1) % n]
+        if not w.get("a_used"):
+            pts.append(w["a"])
+        u1 = (w["b"] - w["a"]) / max(w["len"], 1e-9)
+        u2 = (nx["b"] - nx["a"]) / max(nx["len"], 1e-9)
+        ang = np.degrees(np.arccos(min(1.0, abs(u1 @ u2))))
+        gap = float(np.linalg.norm(nx["a"] - w["b"]))
+        corner = None
+        if ang >= min_angle:
+            A = np.array([u1, -u2]).T
+            t, s = np.linalg.solve(A, nx["a"] - w["b"])
+            x = w["b"] + t * u1
+            if np.linalg.norm(x - w["b"]) <= max_ext and np.linalg.norm(x - nx["a"]) <= max_ext:
+                corner = x
+        if corner is not None:
+            pts.append(corner)
+        elif ang < min_angle and gap <= straight_gap:
+            # near-parallel neighbours with an offset: a jog (perpendicular step), not a diagonal
+            n2 = np.array([-u2[1], u2[0]])
+            off = float((w["b"] - nx["a"]) @ n2)
+            pts.append(w["b"])
+            if abs(off) > 0.25:
+                pts.append(w["b"] - off * n2)
+        else:
+            pts.append(w["b"])
+            if gap > straight_gap:
+                # follow the ground's outline only when it does not wander far from the straight bridge
+                detour = (nx["ta"] - w["tb"]) % ring.length
+                if detour < 1.6 * gap:
+                    pts += ring_section(ring, w["tb"], nx["ta"])
+    poly = Polygon(pts).buffer(0)
+    if poly.geom_type == "MultiPolygon":
+        poly = max(poly.geoms, key=lambda g: g.area)
+    if poly.is_empty or poly.geom_type != "Polygon" or poly.area < 0.5 * foot.area:
+        return None, len(pw)
+    aligned = [np.array(w) for w in walls]
+    poly = remove_spikes(poly)
+    poly = regularize_polygon(poly, fams, tol=12.0)
+    poly = remove_spikes(collapse_short_edges(poly, min_edge, passes=20, walls=aligned))
+    poly = regularize_polygon(poly, fams, tol=12.0)
+    poly = remove_spikes(collapse_short_edges(poly, min_edge, passes=10, walls=aligned))
+    return poly, len(pw)
+
+
 def describe(poly):
     xy = np.array(poly.exterior.coords)
     if len(xy) > 1 and np.allclose(xy[0], xy[-1]):
@@ -533,6 +646,17 @@ def main() -> int:
             if p.geom_type == "Polygon" and not p.is_empty:
                 boundary.append(p)
         print(f"boundary directions: {[round(float(f), 1) for f in fams]}")
+    # the boundary the walls themselves would draw (perimeter walls chained corner to corner, the footprint only
+    # where no wall stands) is written alongside for comparison and for the plan editor; on the backyard it gets the
+    # three fence sides exactly right and the house side and passage wrong, so the footprint boundary stays the drawing
+    wall_boundary = []
+    if foot:
+        wb, n_perimeter = wall_first_boundary(foot[0], segs, fams, a.min_edge)
+        if wb is not None:
+            wall_boundary = [wb]
+            print(f"wall-first boundary from {n_perimeter} perimeter walls: {wb.area:.1f} m², {len(wb.exterior.coords) - 1} sides (kept as wall_boundary)")
+        else:
+            print(f"wall-first boundary not possible ({n_perimeter} perimeter walls)")
     # enclosures the walls close by themselves (a shed, a raised bed)
     faces = polygonize(segs, a.extend, min_area=3.0)
     faces.sort(key=lambda p: -p.area)
@@ -540,7 +664,8 @@ def main() -> int:
     polys = boundary + [p for p in enclosures if not any(p.equals(b) for b in boundary)]
     rounded = [[[round(float(p[0]), 3), round(float(p[1]), 3)] for p in s] for s in segs]
     json.dump({"axis_deg": round(axis, 2), "walls": rounded, "edges": [],
-               "polygons": [describe(p) for p in polys]}, open(work / a.out, "w"))
+               "polygons": [describe(p) for p in polys],
+               "wall_boundary": [describe(p) for p in wall_boundary]}, open(work / a.out, "w"))
     print(f"boundary: {len(boundary)} polygon(s)" + (f", largest {boundary[0].area:.1f} m² with {len(boundary[0].exterior.coords) - 1} sides" if boundary else "")
           + f"; enclosures from walls: {len(enclosures)}")
     return 0

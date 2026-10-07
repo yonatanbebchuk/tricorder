@@ -76,11 +76,24 @@ def main() -> int:
             return None
         return (C + t * d).tolist()
 
+    model_json = model / "asset.json"
+    model_info = json.load(open(model_json)) if model_json.exists() else {}
+    model_frame = model_info.get("frame") or model_info.get("id") or model.name
     for rdir in a.recordings:
         rj = Path(rdir) / "recording.json"
         r = json.load(open(rj))
         rid = r.get("id", Path(rdir).name)
         for item in r.get("items", []):
+            if item.get("source") == "mesh":                 # two points clicked on the mesh, already in a model frame
+                item_frame = item.get("model")
+                if item_frame not in (model_frame, model_info.get("id"), model.name):
+                    out["skipped"].append({"recording": rid, "item": item.get("id"),
+                                           "reason": f"marked on {item_frame}, which is not this model's frame ({model_frame})"})
+                    continue
+                out["distances"].append({"id": f"{rid}/{item.get('id', len(out['distances']) + 1)}", "source": "mesh", "recording": rid,
+                                         "frame": item.get("model", ""), "a": list(map(float, item["a3d"])), "b": list(map(float, item["b3d"])),
+                                         "meters": float(item["meters"]), "note": item.get("note", ""), "at": item.get("at")})
+                continue
             frame = item.get("frame", "")
             im = by_name.get(frame)
             if im is None:
@@ -103,7 +116,7 @@ def main() -> int:
     (run / "measure").mkdir(parents=True, exist_ok=True)
     json.dump(out, open(run / "measure" / "constraints.json", "w"), indent=1)
     for d in out["distances"]:
-        print(f"  {d['id']:14s} {d['frame']}  {d['meters']:.2f} m  = {np.linalg.norm(np.array(d['a']) - np.array(d['b'])):.3f} model units")
+        print(f"  {d['id']:14s} {d['source']:8s} {d['frame']}  {d['meters']:.2f} m  = {np.linalg.norm(np.array(d['a']) - np.array(d['b'])):.3f} model units")
     for s in out["skipped"]:
         print(f"  skipped {s['recording']}/{s['item']}: {s['reason']}")
     print(f"{len(out['distances'])} constraint(s) from {len(a.recordings)} measurement recording(s); mesh {mesh_name}; "

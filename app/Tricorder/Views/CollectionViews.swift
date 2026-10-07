@@ -111,6 +111,7 @@ struct AssetRows: View {
     @Environment(Workspace.self) private var ws
     let env: EnvironmentRecord
     let assets: [AssetRecord]
+    @State private var pendingDelete: AssetRecord?
 
     var body: some View {
         ForEach(assets) { a in
@@ -139,7 +140,20 @@ struct AssetRows: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .contextMenu {
+                Button("Open") { ws.open(.asset(env.id, a.asset.id)) }
+                Button("Show in Finder") { ws.reveal(a.dir) }
+                Divider()
+                Button("Delete Asset…", role: .destructive) { pendingDelete = a }
+            }
             if a.id != assets.last?.id { Divider() }
+        }
+        .confirmationDialog("Delete \(pendingDelete?.asset.name ?? "")?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), presenting: pendingDelete) { a in
+            let deps = env.dependents(ofAsset: a.asset.id)
+            Button(deps.recordings.isEmpty && deps.assets.isEmpty ? "Move to Trash" : "Delete All", role: .destructive) { Task { await ws.deleteAsset(a) } }
+        } message: { a in
+            let deps = env.dependents(ofAsset: a.asset.id)
+            Text("The asset folder is moved to the Trash; the runs that made or used it stay. " + Workspace.cascadeText(recordings: deps.recordings, assets: deps.assets))
         }
     }
 }

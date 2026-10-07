@@ -39,27 +39,60 @@ RUN_KINDS: dict[str, dict[str, Any]] = {
                "slots": [{"key": "asset", "label": "3D model", "accepts": ["model3d"], "min": 1, "max": 1},
                          {"key": "recordings", "label": "New footage", "accepts": ["video", "photos"], "min": 1, "max": 8}],
                "blurb": "New videos or photos are registered into an existing model's cameras; everything is re-optimised and re-meshed."},
-    "layout": {"label": "Layout", "output": "site_plan", "stages": ["solve", "ortho", "trace", "draw", "preview"],
+    "identify": {"label": "Identify", "output": "marks", "stages": ["segment", "name", "lift", "entities", "review", "preview"],
+                 "slots": [{"key": "asset", "label": "3D model", "accepts": ["model3d"], "min": 1, "max": 1},
+                           {"key": "prior", "label": "Prior inventory", "accepts": ["marks"], "min": 0, "max": 1}],
+                 "blurb": "What is where: every region of the frames is segmented, named by a vision-language model, lifted onto the "
+                          "mesh and clustered into named entities with footprints. Publishes a generated marks recording (the inventory); "
+                          "given a prior inventory it re-lifts its masks instead of naming again."},
+    "layout": {"label": "Layout", "output": "site_plan", "stages": ["solve", "ortho", "trace", "annotate", "draw", "preview"],
                "slots": [{"key": "asset", "label": "3D model", "accepts": ["model3d"], "min": 1, "max": 1},
-                         {"key": "recordings", "label": "Measurements", "accepts": ["measurements"], "min": 0, "max": 8}],
-               "blurb": "A 3D model plus tape measurements becomes a site plan: true scale, orthomosaic, wall lines, DXF and PDF."},
+                         {"key": "recordings", "label": "Measurements", "accepts": ["measurements"], "min": 0, "max": 8},
+                         {"key": "marks", "label": "Marks", "accepts": ["marks"], "min": 0, "max": 12}],
+               "blurb": "A 3D model plus tape measurements becomes a site plan: true scale, orthomosaic, wall lines, DXF and PDF. "
+                        "Marks (yours and the generated inventory) put every named element on the plan with areas, lengths and counts."},
+    "edit": {"label": "Edit", "output": "model3d", "stages": ["select", "cut", "complete", "preview"],
+             "slots": [{"key": "asset", "label": "3D model", "accepts": ["model3d"], "min": 1, "max": 1},
+                       {"key": "marks", "label": "Marks", "accepts": ["marks"], "min": 1, "max": 12}],
+             "blurb": "Remove marked entities or regions from the model and complete the ground where they stood; patch marked holes. "
+                      "Publishes a new 3D model in the same frame, so measurements and marks still apply."},
 }
-# Chains the app offers as one recipe: each step is a run; a later step's asset slot takes the earlier run's output.
+# A run's output is an asset kind, except identify, which publishes a recording (a generated marks recording).
+RUN_OUTPUT_IS_RECORDING = {"identify"}
+# Chains the app offers as one recipe: each step is a run; a later step's slots take the earlier runs' outputs ("@r5").
 CHAINS: dict[str, dict[str, Any]] = {
-    "survey": {"label": "Site plan from video", "runs": ["scan", "layout"],
-               "blurb": "Scan, then lay out, in one go. Add measurements now for true scale or later for a re-solve."},
+    "survey": {"label": "Site plan from video", "runs": ["scan", "identify", "layout"],
+               "blurb": "Scan, identify what is where, then lay out, in one go. Add measurements now for true scale or later for a re-solve."},
+    "cleanup": {"label": "Clean up", "runs": ["edit", "identify", "layout"],
+                "blurb": "Remove what you marked, carry the inventory onto the new model, lay it out again."},
 }
 ASSET_KINDS = {"model3d": "3D Model", "site_plan": "Site Plan"}
-RECORDING_KINDS = {"video": "Video", "photos": "Photos", "measurements": "Measurements"}
+RECORDING_KINDS = {"video": "Video", "photos": "Photos", "measurements": "Measurements", "marks": "Marks"}
 STAGE_LABELS = {"frames": "Frames", "sfm": "COLMAP", "register": "Register", "dense": "OpenMVS", "landmarks": "Landmarks",
-                "preview": "Preview", "solve": "Scale & level", "ortho": "Orthomosaic", "trace": "Linework", "draw": "Drawing"}
+                "preview": "Preview", "solve": "Scale & level", "ortho": "Orthomosaic", "trace": "Linework", "annotate": "Elements",
+                "draw": "Drawing", "segment": "Segment", "name": "Name", "lift": "Lift", "entities": "Entities", "review": "Review",
+                "select": "Select", "cut": "Cut", "complete": "Complete"}
+# Element and edit classes a mark can carry (the app's picker and the layout's layers).
+MARK_CLASSES = {"element": ["wall", "fence", "window", "door", "stairs", "area", "tree", "object"], "edit": ["remove", "patch"]}
+MATERIALS = ["grass", "brick", "concrete", "sand", "gravel", "deck", "garden", "soil", "tiles", "stone", "asphalt", "other"]
 IMAGE_EXT = {".jpg", ".jpeg", ".heic", ".heif", ".png", ".dng", ".tif", ".tiff"}
 
 # measure/constraints.json in a layout run (written by scripts/measure_project.py from the measurement recordings,
 # read by scripts/solve_scale.py):
-#   {"distances": [{"id", "source": "snapshot", "recording", "frame", "a": [x,y,z], "b": [x,y,z], "meters", "note", "at"}],
+#   {"distances": [{"id", "source": "snapshot" | "mesh", "recording", "frame", "a": [x,y,z], "b": [x,y,z], "meters", "note", "at"}],
 #    "north": {"source", "frame", "forward": [x,y,z], "bearing"} | null, "up": [x,y,z], "cameras": [[x,y,z], ...]}
 # Points are in the model's own coordinate frame.
+#
+# A marks recording (kind "marks"): items drawn on one 3D model in the app's mesh editor, points in that model's frame:
+#   source: {"model": "model3d-1", "frame": "model3d-1"}
+#   items: [{id, role: "element" | "edit", cls, shape: "point" | "line" | "polygon", points: [[x,y,z], ...], name, note,
+#            material, text, entity: "e12" | null, source: "human" | "accepted" | "generated", at}]
+# The inventory an identify run publishes is a *generated* marks recording: source adds {"generated_by": "r6", "generated": true,
+# "metrics": {...}}, every entity is an item (role element, entity = its id, source "generated", plus confidence, description,
+# area_m2, height_m), and the recording dir holds entities.json, faces.npy, labels.json, segments/, lift/, review/, inventory_map.png.
+# A `patch` edit mark with shape "point" means "fill the hole around this point".
+# A measurement item may be two mesh points instead of two pixels:
+#   {id, source: "mesh", model: "model3d-1", a3d: [x,y,z], b3d: [x,y,z], meters, note, at}
 
 
 def now() -> str:
@@ -210,9 +243,10 @@ class Recording:
     env_id: str
     name: str
     created_at: str
-    kind: str = "video"                          # video | photos | measurements
+    kind: str = "video"                          # video | photos | measurements | marks
     source: dict[str, Any] = field(default_factory=dict)   # video: path (relative to ROOT), size, duration_s, width, height, fps, hdr ...
                                                  # photos: path (the photos/ folder, relative to ROOT), count, size, originals
+                                                 # marks: model (the 3D model the marks were drawn on), frame (its coordinate frame)
     frames: Stage = field(default_factory=Stage)
     frame_settings: FrameSettings = field(default_factory=FrameSettings)
     notes: str = ""
@@ -271,6 +305,13 @@ class RunSettings:
     min_edge_m: float = 1.2          # linework: boundary jogs shorter than this are absorbed
     sheet_scale: int = 100           # wanted PDF sheet scale 1:N
     preview_faces: int = 300_000     # decimation target for the in-app 3D preview
+    boundary: str = "walls"          # layout: the boundary the plan draws: "walls" (perimeter walls chained, footprint where no wall) | "footprint"
+    # identify
+    vlm: str = "qwen-local"          # qwen-local (Qwen2.5-VL through MLX) | claude (hosted, ANTHROPIC_API_KEY) | none (classes from votes only)
+    sam: str = "facebook/sam-vit-base"   # the segmenter checkpoint
+    every: int = 10                  # identify: every n-th registered frame
+    frames_cap: int = 60             # identify: at most this many frames
+    review: int = 1                  # identify: re-project each entity into its best frame and ask the model to confirm
 
     def env(self) -> dict[str, str]:
         return {"RES_LEVEL": str(self.res_level), "FEATURES": self.features, "MATCHER": self.matcher,
@@ -282,9 +323,9 @@ class RunSettings:
 class Run:
     id: str
     env_id: str
-    kind: str                                    # scan | extend | layout
+    kind: str                                    # scan | extend | identify | layout | edit
     inputs: dict[str, Any]                       # by slot key: scan {"recording": "rec1"}; extend / layout {"asset": "model3d-1", "recordings": [...]}
-                                                 # "@r5" as an asset id means "the asset run r5 publishes" (a chained run)
+                                                 # "@r5" as an asset id (in any asset slot) means "the asset run r5 publishes" (a chained run)
     created_at: str
     settings: RunSettings = field(default_factory=RunSettings)
     status: str = "queued"                       # queued | running | done | failed | cancelled | interrupted
@@ -309,23 +350,61 @@ class Run:
         return RUN_KINDS[self.kind]["stages"]
 
     def recording_ids(self) -> list[str]:
-        """Every recording this run consumes, whichever slot holds it."""
+        """Every recording this run consumes, whichever slot holds it (chained "@run" references excluded)."""
         ids = []
         for slot in RUN_KINDS[self.kind]["slots"]:
             v = self.inputs.get(slot["key"])
             if slot["accepts"][0] in RECORDING_KINDS:
-                ids += [v] if isinstance(v, str) else list(v or [])
+                ids += [x for x in ([v] if isinstance(v, str) else list(v or [])) if isinstance(x, str) and not x.startswith("@")]
         return ids
 
     @property
     def asset_id(self) -> str | None:
         return self.inputs.get("asset")
 
+    def asset_slots(self) -> list[str]:
+        """The keys of this run's slots that take assets."""
+        return [slot["key"] for slot in RUN_KINDS[self.kind]["slots"] if slot["accepts"][0] in ASSET_KINDS]
+
+    def pending_refs(self) -> list[tuple[str, int | None, str]]:
+        """Slot values still naming another run's output ("@r5"): [(slot key, index in a list slot or None, run id)]."""
+        out = []
+        for slot in RUN_KINDS[self.kind]["slots"]:
+            v = self.inputs.get(slot["key"])
+            if isinstance(v, str) and v.startswith("@"):
+                out.append((slot["key"], None, v[1:]))
+            elif isinstance(v, list):
+                for i, x in enumerate(v):
+                    if isinstance(x, str) and x.startswith("@"):
+                        out.append((slot["key"], i, x[1:]))
+        return out
+
+    def resolve_ref(self, run_id: str, output_id: str) -> bool:
+        """Replace every "@run_id" in the inputs by the id of what that run published."""
+        changed = False
+        for key, idx, ref in self.pending_refs():
+            if ref != run_id:
+                continue
+            if idx is None:
+                self.inputs[key] = output_id
+            else:
+                self.inputs[key][idx] = output_id
+            changed = True
+        return changed
+
+    @property
+    def waits_for_all(self) -> list[str]:
+        """Every run this one waits for: the runs its slots reference, plus an explicit `after`."""
+        ids = list(dict.fromkeys(r for _, _, r in self.pending_refs()))
+        if self.after and self.after not in ids:
+            ids.append(self.after)
+        return ids
+
     @property
     def waits_for(self) -> str | None:
-        """The run whose output this run's asset slot names ("@r5"), if any."""
-        a = self.asset_id
-        return a[1:] if isinstance(a, str) and a.startswith("@") else self.after
+        """The first run this one waits for, if any (chained runs)."""
+        w = self.waits_for_all
+        return w[0] if w else None
 
     def save(self) -> None:
         d = asdict(self)
@@ -372,9 +451,13 @@ class Asset:
     files: list[dict[str, Any]] = field(default_factory=list)   # {path, label, size}
     metrics: dict[str, Any] = field(default_factory=dict)
     notes: str = ""
-    derived_from: str | None = None              # model3d made by an extend run: the model it grew out of
+    derived_from: str | None = None              # model3d made by an extend or edit run: the model it grew out of
     sources: list[dict[str, Any]] = field(default_factory=list)   # model3d: the frames it was built from,
                                                  # [{"recording": "rec1", "prefix": ""}, {"recording": "rec4", "prefix": "rec4/"}]
+    frame: str | None = None                     # the model whose coordinate frame this asset shares (a scan or extend
+                                                 # defines a new frame: itself; an edit keeps its parent's; an inventory
+                                                 # or a site plan: the model it was made on)
+    removed_entities: list[str] = field(default_factory=list)   # model3d from an edit: inventory entity ids it removed
 
     @property
     def dir(self) -> Path:

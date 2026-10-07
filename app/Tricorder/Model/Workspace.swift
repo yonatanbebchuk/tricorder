@@ -124,7 +124,7 @@ final class Workspace {
     func open(_ route: Route) {
         let env: String
         switch route {
-        case .recording(let e, _), .run(let e, _), .asset(let e, _): env = e
+        case .recording(let e, _), .run(let e, _), .asset(let e, _), .editor(let e, _, _): env = e
         }
         if selection?.envId != env {
             selection = .environment(env)
@@ -195,6 +195,30 @@ final class Workspace {
         }
     }
 
+    /// A marks recording on a model, with its first items; opens it when done (or stays, when `open` is false).
+    @discardableResult
+    func createMarksRecording(env: String, name: String, model: String, items: [MarkItem], open openIt: Bool = true) async -> String? {
+        guard let root else { return nil }
+        var created: String?
+        _ = await attempt("Saving the marks failed") {
+            let rec = try await Pipeline.createMarks(root: root, envId: env, name: name, model: model)
+            let dir = ManifestStore.environmentsDir(root).appending(path: "\(env)/recordings/\(rec)")
+            try await Task.detached { try ManifestStore.saveMarks(recordingDir: dir, items: items) }.value
+            await refresh()
+            created = rec
+            if openIt { open(.recording(env, rec)) }
+        }
+        return created
+    }
+
+    func saveMarks(_ r: RecordingRecord, items: [MarkItem]) async {
+        let dir = r.dir
+        _ = await attempt("Saving the marks failed") {
+            try await Task.detached { try ManifestStore.saveMarks(recordingDir: dir, items: items) }.value
+            await refresh()
+        }
+    }
+
     func saveMeasurements(_ r: RecordingRecord, items: [MeasurementItem], north: MeasurementNorth?) async {
         let dir = r.dir
         _ = await attempt("Saving the measurements failed") {
@@ -212,24 +236,22 @@ final class Workspace {
         }
     }
 
-    /// A recipe: one run, or a chain where each later step takes the previous run's asset ("@r5") and is launched
-    /// by it. The first run starts now; the page of the first run opens.
+    /// A recipe: one run, or a chain where later steps take earlier runs' assets ("@r5") and are launched by them.
+    /// The first run starts now; the page of the first run opens.
     func createRuns(env: String, steps: [RunStep]) async -> Bool {
         guard let root, !steps.isEmpty else { return false }
         return await attempt("Starting the run failed") {
-            var previous: String?
-            var first: String?
+            var ids: [String] = []
             for var step in steps {
-                if let previous {
-                    step.inputs["asset"] = ["@\(previous)"]
-                    step.after = previous
+                for (slot, stepIndex) in step.refs where stepIndex < ids.count {
+                    step.inputs[slot] = ["@\(ids[stepIndex])"]
                 }
-                let id = try await Pipeline.createRun(root: root, envId: env, step: step, start: previous == nil)
-                previous = id
-                if first == nil { first = id }
+                if let last = step.refs.values.max(), last < ids.count { step.after = ids[last] }
+                let id = try await Pipeline.createRun(root: root, envId: env, step: step, start: ids.isEmpty)
+                ids.append(id)
             }
             await refresh()
-            if let first { open(.run(env, first)) }
+            if let first = ids.first { open(.run(env, first)) }
         }
     }
 
@@ -268,12 +290,35 @@ final class Workspace {
         await trash("Deleting the run failed", r.dir) { if path.last == .run(r.run.envId, r.run.id) { path.removeLast() } }
     }
 
+    /// Delete a recording and everything that depends on it (measurements marked on a video's frames).
     func deleteRecording(_ r: RecordingRecord) async {
-        await trash("Deleting the recording failed", r.dir) { if path.last == .recording(r.rec.envId, r.rec.id) { path.removeLast() } }
+        guard let env = environment(r.rec.envId) else { return }
+        let deps = env.dependents(ofRecording: r.rec.id)
+        for d in deps.recordings { _ = await attempt("Deleting \(d.rec.name) failed") { try await Task.detached { try ManifestStore.trash(d.dir) }.value } }
+        await trash("Deleting the recording failed", r.dir) { if case .recording(_, let id)? = path.last, id == r.rec.id || deps.recordings.contains(where: { $0.rec.id == id }) { path.removeLast() } }
     }
 
+    /// Delete an asset and everything that depends on it (marks and inventories on a model, mesh measurements, edited models).
     func deleteAsset(_ a: AssetRecord) async {
-        await trash("Deleting the asset failed", a.dir) { if path.last == .asset(a.asset.envId, a.asset.id) { path.removeLast() } }
+        guard let env = environment(a.asset.envId) else { return }
+        let deps = env.dependents(ofAsset: a.asset.id)
+        for d in deps.recordings { _ = await attempt("Deleting \(d.rec.name) failed") { try await Task.detached { try ManifestStore.trash(d.dir) }.value } }
+        for d in deps.assets { _ = await attempt("Deleting \(d.asset.name) failed") { try await Task.detached { try ManifestStore.trash(d.dir) }.value } }
+        await trash("Deleting the asset failed", a.dir) {
+            switch path.last {
+            case .asset(_, let id)? where id == a.asset.id || deps.assets.contains(where: { $0.asset.id == id }): path.removeLast()
+            case .editor(_, let id, _)? where id == a.asset.id || deps.assets.contains(where: { $0.asset.id == id }): path.removeLast()
+            case .recording(_, let id)? where deps.recordings.contains(where: { $0.rec.id == id }): path.removeLast()
+            default: break
+            }
+        }
+    }
+
+    /// One sentence for a delete confirmation: what else goes.
+    static func cascadeText(recordings: [RecordingRecord], assets: [AssetRecord]) -> String {
+        let names = recordings.map(\.rec.name) + assets.map(\.asset.name)
+        guard !names.isEmpty else { return "" }
+        return "This also deletes what depends on it: " + names.joined(separator: ", ") + ". Continue?"
     }
 
     func deleteEnvironment(_ e: EnvironmentRecord) async {

@@ -67,15 +67,23 @@ struct MeasurementsEditor: View {
             }
             ForEach(items) { item in
                 HStack(spacing: 12) {
-                    ItemPreview(item: item, dir: env.recording(item.recording)?.imagesDir)
+                    if item.isMesh {
+                        Rectangle().fill(.quaternary).overlay { Image(systemName: "cube.transparent").foregroundStyle(.secondary) }
+                            .frame(width: 96, height: 64).clipShape(RoundedRectangle(cornerRadius: 6))
+                    } else {
+                        ItemPreview(item: item, dir: env.recording(item.recording)?.imagesDir)
+                    }
                     VStack(alignment: .leading, spacing: 2) {
                         Text(String(format: "%.2f m", item.meters)).font(.headline)
-                        Text("\(item.frame) · \(env.recording(item.recording)?.rec.name ?? item.recording)").font(.caption).foregroundStyle(.secondary)
+                        Text(item.isMesh ? "two points on the mesh of \(env.asset(item.model ?? "")?.asset.name ?? item.model ?? "?")"
+                                         : "\(item.frame) · \(env.recording(item.recording)?.rec.name ?? item.recording)").font(.caption).foregroundStyle(.secondary)
                         if let n = item.note, !n.isEmpty { Text(n).font(.caption) }
                     }
                     Spacer()
-                    Button("Show") { selectedFrame = item.frame; sourceId = item.recording; pointA = CGPoint(x: item.a[0], y: item.a[1]); pointB = CGPoint(x: item.b[0], y: item.b[1]) }
-                        .buttonStyle(.borderless)
+                    if !item.isMesh, item.a.count >= 2, item.b.count >= 2 {
+                        Button("Show") { selectedFrame = item.frame; sourceId = item.recording; pointA = CGPoint(x: item.a[0], y: item.a[1]); pointB = CGPoint(x: item.b[0], y: item.b[1]) }
+                            .buttonStyle(.borderless)
+                    }
                     Button("Remove", systemImage: "xmark.circle") { items.removeAll { $0.id == item.id } }
                         .labelStyle(.iconOnly).buttonStyle(.borderless).foregroundStyle(.secondary)
                 }

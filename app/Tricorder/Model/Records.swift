@@ -10,7 +10,11 @@ struct RecordingRecord: Identifiable, Hashable, Sendable {
     var id: String { "\(rec.envId)/\(rec.id)" }
     var isBusy: Bool { rec.frames.status == .running }
     var isMeasurements: Bool { rec.isMeasurements }
+    var isMarks: Bool { rec.isMarks }
+    var isGenerated: Bool { rec.isGenerated }
     var imagesDir: URL { dir.appending(path: "images") }
+    /// A generated inventory's labelled map.
+    var mapImage: URL? { ManifestStore.existing(dir.appending(path: "inventory_map.png")) }
 }
 
 struct RunRecord: Identifiable, Hashable, Sendable {
@@ -36,6 +40,7 @@ struct AssetRecord: Identifiable, Hashable, Sendable {
     var constraints: Constraints   // 3D model: the measurements entered so far
     var transform: Transform?      // site plan: scale / level / north
     var overlay: PlanOverlay?      // site plan: contours, footprint, measurements over the orthomosaic
+    var levelled: [[Double]]?      // 3D model / site plan: the matrix the preview USDZ was exported with (model → levelled)
 
     var id: String { "\(asset.envId)/\(asset.id)" }
     func url(_ relative: String) -> URL { dir.appending(path: relative) }
@@ -47,6 +52,7 @@ struct AssetRecord: Identifiable, Hashable, Sendable {
         return nil
     }
     var hasTexturedMesh: Bool { has("dense/scene_dense_mesh_texture.obj") }
+    var isModel: Bool { asset.kind == .model3d }
 }
 
 struct EnvironmentRecord: Identifiable, Hashable, Sendable {
@@ -87,10 +93,59 @@ struct EnvironmentRecord: Identifiable, Hashable, Sendable {
     var photoRecordings: [RecordingRecord] { recordings.filter { $0.rec.isPhotos } }
     var footageRecordings: [RecordingRecord] { recordings.filter { $0.rec.isFootage } }
     var measurementRecordings: [RecordingRecord] { recordings.filter { $0.isMeasurements } }
+    var marksRecordings: [RecordingRecord] { recordings.filter { $0.isMarks } }
+    /// Marks drawn on a model's coordinate frame (an edit keeps its parent's frame, so its marks still apply).
+    func marksRecordings(for model: AssetRecord) -> [RecordingRecord] {
+        marksRecordings.filter { $0.rec.markFrame == model.asset.frameId || $0.rec.markModel == model.asset.id }
+    }
+    /// A person's marks on a model's frame (not the generated inventories).
+    func humanMarks(for model: AssetRecord) -> [RecordingRecord] { marksRecordings(for: model).filter { !$0.isGenerated } }
     var models: [AssetRecord] { assets.filter { $0.asset.kind == .model3d } }
-    func runsUsing(asset id: String) -> [RunRecord] { runs.filter { $0.run.inputAssetId == id } }
+    /// Generated inventories, newest last.
+    var inventories: [RecordingRecord] { marksRecordings.filter(\.isGenerated) }
+    /// The newest inventory made on a model's frame.
+    func inventory(for model: AssetRecord) -> RecordingRecord? {
+        inventories.filter { $0.rec.markFrame == model.asset.frameId || $0.rec.markModel == model.asset.id }
+            .max { ManifestStore.number($0.rec.id) < ManifestStore.number($1.rec.id) }
+    }
+    /// The entities the newest inventory proposes on a model.
+    func proposals(for model: AssetRecord) -> [MarkItem] { inventory(for: model)?.rec.marks ?? [] }
+    func runsUsing(asset id: String) -> [RunRecord] { runs.filter { $0.run.inputAssetIds.values.contains(id) } }
+
+    // MARK: dependencies between recordings and assets
+
+    /// What else goes when a recording goes: measurement recordings marked on a video's frames.
+    func dependents(ofRecording id: String) -> (recordings: [RecordingRecord], assets: [AssetRecord]) {
+        guard let r = recording(id) else { return ([], []) }
+        var recs: [RecordingRecord] = []
+        if r.rec.isFootage {
+            recs = measurementRecordings.filter { m in m.rec.items.contains { !$0.isMesh && $0.recording == id } }
+        }
+        return (recs, [])
+    }
+
+    /// What else goes when an asset goes: marks and inventories drawn on a model, measurements clicked on its mesh,
+    /// and models edited out of it (same frame), recursively.
+    func dependents(ofAsset id: String) -> (recordings: [RecordingRecord], assets: [AssetRecord]) {
+        guard let a = asset(id) else { return ([], []) }
+        var recs: [RecordingRecord] = []
+        var more: [AssetRecord] = []
+        if a.asset.kind == .model3d {
+            recs += marksRecordings.filter { $0.rec.markModel == id || $0.rec.markFrame == id }
+            recs += measurementRecordings.filter { m in m.rec.items.contains { $0.isMesh && $0.model == id } }
+            more += assets.filter { $0.asset.kind == .model3d && $0.asset.derivedFrom == id }
+        }
+        var allRecs = recs
+        var allAssets = more
+        for m in more {
+            let d = dependents(ofAsset: m.asset.id)
+            allRecs += d.recordings.filter { r in !allRecs.contains { $0.id == r.id } }
+            allAssets += d.assets.filter { x in !allAssets.contains { $0.id == x.id } }
+        }
+        return (allRecs, allAssets)
+    }
     /// Chained runs that wait for this run's output.
-    func runsWaiting(on runId: String) -> [RunRecord] { runs.filter { $0.run.waitsFor == runId } }
+    func runsWaiting(on runId: String) -> [RunRecord] { runs.filter { $0.run.waitsForAll.contains(runId) } }
     /// The asset (if any) a run consumed, for labels and links.
     func inputName(of run: Run) -> String {
         if let r = run.inputRecordingId { return recording(r)?.rec.name ?? r }
@@ -98,8 +153,21 @@ struct EnvironmentRecord: Identifiable, Hashable, Sendable {
         if let a = run.inputAssetId {
             let base = asset(a)?.asset.name ?? a
             let m = run.inputRecordingIds
-            if run.kind == .extend { return base + " + \(m.count) new recording\(m.count == 1 ? "" : "s")" }
-            return m.isEmpty ? base + " (scale estimated)" : base + " + \(m.count) measurement\(m.count == 1 ? "" : "s")"
+            switch run.kind {
+            case .extend: return base + " + \(m.count) new recording\(m.count == 1 ? "" : "s")"
+            case .identify: return base + (run.inputs["prior"]?.string.map { " + prior \(recording($0)?.rec.name ?? $0)" } ?? "")
+            case .edit: return base + " + \(m.count) marks recording\(m.count == 1 ? "" : "s")"
+            case .layout:
+                var parts = [base]
+                let meas = m.filter { recording($0)?.isMeasurements ?? false }.count
+                let marks = m.filter { recording($0)?.isMarks ?? false }
+                parts.append(meas == 0 ? "scale estimated" : "\(meas) measurement\(meas == 1 ? "" : "s")")
+                let human = marks.filter { !(recording($0)?.isGenerated ?? false) }.count
+                if human > 0 { parts.append("\(human) marks") }
+                if marks.count > human { parts.append("inventory") }
+                return parts.joined(separator: " + ")
+            case .scan: return base
+            }
         }
         return "–"
     }
@@ -147,6 +215,7 @@ enum Route: Hashable, Sendable {
     case recording(String, String)
     case run(String, String)
     case asset(String, String)
+    case editor(String, String, String?)   // the full-view mesh editor on a 3D model asset, optionally into a given marks recording
 }
 
 /// Sheet requests carrying their context.

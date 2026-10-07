@@ -1,11 +1,13 @@
 import Foundation
 
-/// One run of a recipe: its kind, the ids in each input slot, settings; `after` chains it onto another run.
+/// One run of a recipe: its kind, the ids in each input slot, settings; `refs` names the recipe steps whose outputs fill
+/// the remaining asset slots (resolved to "@<run id>" when the chain is created), `after` chains it onto another run.
 struct RunStep: Sendable, Hashable {
     var kind: RunKind
     var inputs: [String: [String]]
     var settings: RunSettings
     var label: String
+    var refs: [String: Int] = [:]
     var after: String? = nil
 }
 
@@ -57,7 +59,8 @@ enum Pipeline {
     private static func settingsArgs(_ s: RunSettings, label: String) -> [String] {
         ["--res-level", "\(s.resLevel)", "--features", s.features, "--matcher", s.matcher, "--matching", s.matching,
          "--measures", "\(s.measures)", "--max-faces", "\(s.maxFaces)", "--px-per-m", "\(s.pxPerM)", "--contour", "\(s.contourM)", "--sheet-scale", "\(s.sheetScale)", "--wall", "\(s.wallJumpM)", "--edge", "\(s.edgeJumpM)", "--min-edge", "\(s.minEdgeM)",
-         "--preview-faces", "\(s.previewFaces)", "--label", label]
+         "--preview-faces", "\(s.previewFaces)", "--vlm", s.vlm, "--sam", s.sam, "--every", "\(s.every)", "--frames-cap", "\(s.framesCap)",
+         "--review", "\(s.review)", "--boundary", s.boundary, "--label", label]
     }
 
     private static func frameArgs(_ f: FrameSettings) -> [String] {
@@ -84,6 +87,12 @@ enum Pipeline {
 
     static func createMeasurements(root: URL, envId: String, name: String) async throws -> String {
         let out = try await run(root: root, ["new-measurements", envId, "--name", name])
+        guard let id = ids(out)["recording"] else { throw PipelineError("no recording id returned") }
+        return id
+    }
+
+    static func createMarks(root: URL, envId: String, name: String, model: String) async throws -> String {
+        let out = try await run(root: root, ["new-marks", envId, "--model", model, "--name", name])
         guard let id = ids(out)["recording"] else { throw PipelineError("no recording id returned") }
         return id
     }

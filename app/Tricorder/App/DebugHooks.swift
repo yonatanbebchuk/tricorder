@@ -58,6 +58,7 @@ enum DebugHooks {
                     case "recording": ws.open(.recording(p[0], p[2]))
                     case "run": ws.open(.run(p[0], p[2]))
                     case "asset": ws.open(.asset(p[0], p[2]))
+                    case "editor": ws.open(.editor(p[0], p[2], nil))
                     default: break
                     }
                 default: break
@@ -169,6 +170,8 @@ enum DebugHooks {
                 if let env = ws.environment(e), let r = env.run(id) { page = AnyView(RunView(env: env, record: r).pageContent) }
             case .asset(let e, let id):
                 if let env = ws.environment(e), let a = env.asset(id) { page = AnyView(AssetView(env: env, record: a).pageContent) }
+            case .editor(let e, let id, let rec):
+                if let env = ws.environment(e), let a = env.asset(id) { page = AnyView(MeshEditorView(env: env, record: a, initialRecording: rec)) }
             }
         } else if let sel = ws.selection, let env = ws.environment(sel.envId) {
             switch sel {

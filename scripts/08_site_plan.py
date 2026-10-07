@@ -123,16 +123,59 @@ def plan_measurements(work: Path, T: np.ndarray):
 
 # ---------------------------------------------------------------- DXF
 
-def write_dxf(path: Path, ortho: dict, cont, foot, meas, title: str, sub: str, linework: dict | None = None):
+ELEMENT_LAYERS = {"wall": ("WALLS_MARKED", 7), "fence": ("FENCES", 34), "window": ("WINDOWS", 5), "door": ("DOORS", 30), "stairs": ("STAIRS", 6),
+                  "tree": ("TREES", 3), "bush": ("PLANTING", 3), "object": ("OBJECTS", 1), "area": ("AREAS", 8)}
+
+
+def element_layer(el: dict) -> str:
+    if el.get("cls") == "area":
+        return f"AREA_{(el.get('material') or 'other').upper()}"
+    return ELEMENT_LAYERS.get(el.get("cls", "object"), ("OBJECTS", 1))[0]
+
+
+def write_dxf(path: Path, ortho: dict, cont, foot, meas, title: str, sub: str, linework: dict | None = None, elements: dict | None = None):
     import ezdxf
     doc = ezdxf.new("R2010", setup=True)
     doc.header["$INSUNITS"] = 6                             # metres
     for name, color in (("ORTHO", 8), ("GRID", 253), ("GRID_MAJOR", 251), ("CONTOURS", 32), ("CONTOURS_INDEX", 30),
-                        ("FOOTPRINT", 4), ("WALLS", 7), ("EDGES", 8), ("BOUNDARY", 7), ("ENCLOSURES", 7), ("DIMENSIONS", 3),
-                        ("MEASURE", 1), ("NORTH", 7), ("SCALEBAR", 7), ("TITLE", 7)):
+                        ("FOOTPRINT", 4), ("WALLS", 7), ("EDGES", 8), ("BOUNDARY", 7), ("BOUNDARY_WALL", 7), ("BOUNDARY_FENCE", 34),
+                        ("BOUNDARY_ALT", 8), ("ENCLOSURES", 7), ("DIMENSIONS", 3), ("OPENINGS", 5), ("LANDUSE", 8),
+                        ("MEASURE", 1), ("NORTH", 7), ("SCALEBAR", 7), ("TITLE", 7), ("LABELS", 7), ("LEGEND", 7)):
         doc.layers.add(name, color=color)
+    doc.layers.get("BOUNDARY_ALT").off()
+    for _, (name, color) in ELEMENT_LAYERS.items():
+        if name not in doc.layers:
+            doc.layers.add(name, color=color)
     msp = doc.modelspace()
     x0, y1, w, h = ortho["x_min"], ortho["y_max"], ortho["width_m"], ortho["height_m"]
+    for el in (elements or {}).get("elements", []):
+        if el.get("minor"):                                   # small or unsure generated entities: not on the drawing
+            continue
+        layer = element_layer(el)
+        if layer not in doc.layers:
+            doc.layers.add(layer, color=8)
+        pts = el.get("points") or []
+        if el.get("shape") == "polygon" and len(pts) >= 3:
+            msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": layer, "const_width": 0.03 if el["cls"] == "area" else 0.04})
+            if el["cls"] == "area":
+                try:
+                    hatch = msp.add_hatch(color=254, dxfattribs={"layer": layer})
+                    hatch.set_pattern_fill("ANSI31" if el.get("material") in ("brick", "tiles", "stone") else "DOTS" if el.get("material") in ("sand", "gravel", "soil", "garden") else "GRASS", scale=0.5)
+                    hatch.paths.add_polyline_path(pts, is_closed=True)
+                except Exception:
+                    pass
+        elif len(pts) >= 2:
+            msp.add_lwpolyline(pts, dxfattribs={"layer": layer, "const_width": 0.06 if el["cls"] in ("wall", "fence") else 0.03})
+        elif len(pts) == 1:
+            msp.add_circle(tuple(pts[0]), 0.25, dxfattribs={"layer": layer})
+        if pts:
+            c = np.mean(np.array(pts), axis=0)
+            label = el.get("name") or el.get("cls", "")
+            if el.get("area_m2"):
+                label += f" {el['area_m2']:.1f} m²"
+            elif el.get("length_m") and el["cls"] in ("wall", "fence"):
+                label += f" {el['length_m']:.2f} m"
+            msp.add_text(label, height=0.22, dxfattribs={"layer": "LABELS"}).set_placement((c[0], c[1]), align=ezdxf.enums.TextEntityAlignment.MIDDLE_CENTER)
     y0, x1 = y1 - h, x0 + w
     img = doc.add_image_def(filename="orthomosaic.png", size_in_pixel=(ortho["width_px"], ortho["height_px"]))
     msp.add_image(image_def=img, insert=(x0, y0), size_in_units=(w, h), rotation=0, dxfattribs={"layer": "ORTHO"})
@@ -158,9 +201,36 @@ def write_dxf(path: Path, ortho: dict, cont, foot, meas, title: str, sub: str, l
         msp.add_lwpolyline(seg, dxfattribs={"layer": "WALLS", "const_width": 0.05})
     for seg in (linework or {}).get("edges", []):
         msp.add_lwpolyline(seg, dxfattribs={"layer": "EDGES"})
+    structure = (elements or {})
+    chosen = structure.get("boundaries", {}).get(structure.get("boundary_source", ""))
     for k, poly in enumerate((linework or {}).get("polygons", [])):
         pts = poly["points"]
-        msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": "BOUNDARY" if k == 0 else "ENCLOSURES", "const_width": 0.08 if k == 0 else 0.04})
+        if k == 0 and chosen:
+            # the boundary edge by edge, each in its class (wall / fence / unknown); the other traced boundary on a layer that is off
+            for e in chosen["edges"]:
+                layer = {"wall": "BOUNDARY_WALL", "fence": "BOUNDARY_FENCE"}.get(e["cls"], "BOUNDARY")
+                msp.add_lwpolyline([e["a"], e["b"]], dxfattribs={"layer": layer, "const_width": 0.1 if e["cls"] == "wall" else 0.05})
+            for src, b in structure.get("boundaries", {}).items():
+                if src != structure.get("boundary_source"):
+                    msp.add_lwpolyline(b["points"], close=True, dxfattribs={"layer": "BOUNDARY_ALT", "linetype": "DASHED"})
+            for op in chosen.get("openings", []):
+                a_, b_ = np.array(op["a"]), np.array(op["b"])
+                d = b_ - a_
+                L_ = max(np.linalg.norm(d), 1e-9)
+                nrm = np.array([-d[1], d[0]]) / L_ * op.get("swing", 1)
+                if op["cls"] == "window":
+                    for off in (-0.08, 0.08):
+                        msp.add_lwpolyline([tuple(a_ + nrm * off), tuple(b_ + nrm * off)], dxfattribs={"layer": "OPENINGS"})
+                    msp.add_lwpolyline([tuple(a_ - nrm * 0.08), tuple(a_ + nrm * 0.08)], dxfattribs={"layer": "OPENINGS"})
+                    msp.add_lwpolyline([tuple(b_ - nrm * 0.08), tuple(b_ + nrm * 0.08)], dxfattribs={"layer": "OPENINGS"})
+                else:
+                    leaf = a_ + nrm * L_
+                    msp.add_lwpolyline([tuple(a_), tuple(leaf)], dxfattribs={"layer": "OPENINGS"})
+                    import math
+                    ang0 = math.degrees(math.atan2(nrm[1], nrm[0])); ang1 = math.degrees(math.atan2(d[1], d[0]))
+                    msp.add_arc(center=tuple(a_), radius=L_, start_angle=min(ang0, ang1), end_angle=max(ang0, ang1), dxfattribs={"layer": "OPENINGS"})
+        else:
+            msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": "BOUNDARY" if k == 0 else "ENCLOSURES", "const_width": 0.08 if k == 0 else 0.04})
         for i, L in enumerate(poly["lengths"]):
             if L < 0.5:
                 continue
@@ -168,6 +238,37 @@ def write_dxf(path: Path, ortho: dict, cont, foot, meas, title: str, sub: str, l
             dim = msp.add_aligned_dim(p1=tuple(p1), p2=tuple(p2), distance=-0.6 if k == 0 else 0.35, text=f"{L:.2f} m",
                                       dxfattribs={"layer": "DIMENSIONS"})
             dim.render()
+    if "PARTITION" not in doc.layers:
+        doc.layers.add("PARTITION", color=7)
+    for lu in structure.get("landuse", []):
+        if lu["material"] == "unassigned":
+            continue
+        for part in lu["polygons"]:
+            pts_ = part["exterior"]
+            msp.add_lwpolyline(pts_, close=True, dxfattribs={"layer": "PARTITION", "const_width": 0.04})
+            for i in range(len(pts_)):
+                p1, p2 = pts_[i], pts_[(i + 1) % len(pts_)]
+                L_ = float(np.hypot(p2[0] - p1[0], p2[1] - p1[1]))
+                if L_ < 0.5:
+                    continue
+                dim = msp.add_aligned_dim(p1=tuple(p1), p2=tuple(p2), distance=0.3, text=f"{L_:.2f} m", dxfattribs={"layer": "DIMENSIONS"})
+                dim.render()
+            c_ = np.mean(np.array(pts_), axis=0)
+            msp.add_text(f"{lu['name'].upper()} {lu['area_m2']:.1f} m²", height=0.25, dxfattribs={"layer": "LABELS"}).set_placement((c_[0], c_[1]), align=ezdxf.enums.TextEntityAlignment.MIDDLE_CENTER)
+    for lu in structure.get("landuse", []):
+        for part in lu["polygons"]:
+            try:
+                hatch = msp.add_hatch(color=254, dxfattribs={"layer": "LANDUSE"})
+                mat = lu["material"]
+                pattern = "ANSI31" if mat in ("brick", "tiles", "stone", "concrete", "asphalt") else "DOTS" if mat in ("sand", "gravel", "soil", "garden") else "GRASS" if mat == "grass" else "ANSI37"
+                if mat == "unassigned":
+                    continue
+                hatch.set_pattern_fill(pattern, scale=0.6)
+                hatch.paths.add_polyline_path(part["exterior"], is_closed=True, flags=1)
+                for h in part["holes"]:
+                    hatch.paths.add_polyline_path(h, is_closed=True, flags=16)
+            except Exception:
+                pass
     for m in meas:
         dim = msp.add_aligned_dim(p1=tuple(m["a"]), p2=tuple(m["b"]), distance=0.4, text=f"{m['meters']:.2f} m",
                                   dxfattribs={"layer": "MEASURE"})
@@ -186,12 +287,30 @@ def write_dxf(path: Path, ortho: dict, cont, foot, meas, title: str, sub: str, l
     msp.add_text("5 m", height=0.25, dxfattribs={"layer": "SCALEBAR"}).set_placement((sx + 4.85, sy - 0.4))
     msp.add_text(title, height=0.6, dxfattribs={"layer": "TITLE"}).set_placement((sx + 7, sy - 0.15))
     msp.add_text(sub, height=0.25, dxfattribs={"layer": "TITLE"}).set_placement((sx + 7, sy - 0.65))
+    # legend and quantities, to the right of the drawing
+    q = (elements or {}).get("quantities") or {}
+    if q:
+        lx, ly = x0 + w + 1.5, y1
+        msp.add_text("QUANTITIES", height=0.35, dxfattribs={"layer": "LEGEND"}).set_placement((lx, ly))
+        row = 0
+        for mat, area in sorted(q.get("areas", {}).items(), key=lambda kv: -kv[1]):
+            row += 1
+            msp.add_text(f"{mat}: {area:.1f} m²", height=0.25, dxfattribs={"layer": "LEGEND"}).set_placement((lx, ly - 0.5 * row))
+        for cls, length in q.get("lengths", {}).items():
+            row += 1
+            msp.add_text(f"{cls}: {length:.1f} m", height=0.25, dxfattribs={"layer": "LEGEND"}).set_placement((lx, ly - 0.5 * row))
+        for cls, n in sorted(q.get("counts", {}).items()):
+            if cls in ("area", "wall", "fence"):
+                continue
+            row += 1
+            msp.add_text(f"{cls}: {n}", height=0.25, dxfattribs={"layer": "LEGEND"}).set_placement((lx, ly - 0.5 * row))
     doc.saveas(path)
 
 
 # ---------------------------------------------------------------- PDF
 
-def write_pdf(path: Path, ortho_png: Path, ortho: dict, cont, foot, meas, title: str, sub: str, wanted_scale: int, linework: dict | None = None):
+def write_pdf(path: Path, ortho_png: Path, ortho: dict, cont, foot, meas, title: str, sub: str, wanted_scale: int, linework: dict | None = None,
+              elements: dict | None = None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -206,8 +325,10 @@ def write_pdf(path: Path, ortho_png: Path, ortho: dict, cont, foot, meas, title:
                   and (w + 3) * 1000 / s <= avail_w and (h + 3) * 1000 / s <= avail_h), 1000)
     mm = 1000.0 / scale                                     # mm on paper per metre
     pdf = PdfPages(str(path))
-    for n, page in enumerate(("ortho", "lines")):
+    for n, page in enumerate(("ortho", "lines", "inner")):
         if page == "lines" and not linework:
+            continue
+        if page == "inner" and not (elements or {}).get("landuse"):
             continue
         fig = plt.figure(figsize=(A2[0] / 25.4, A2[1] / 25.4))
         aw, ah = (w + 3) * mm / A2[0], (h + 3) * mm / A2[1]
@@ -216,7 +337,7 @@ def write_pdf(path: Path, ortho_png: Path, ortho: dict, cont, foot, meas, title:
         bottom = (MARGIN + TITLE_H + (avail_h - (h + 3) * mm) / 2) / A2[1]
         ax = fig.add_axes([left, bottom, aw, ah])
         ax.set_xlim(x0 - 1.5, x1 + 1.5); ax.set_ylim(y0 - 1.5, y1 + 1.5); ax.set_aspect("equal"); ax.axis("off")
-        draw_page(fig, ax, page, ortho_png, ortho, cont, foot, meas, linework, title, sub, scale, mm, A2)
+        draw_page(fig, ax, page, ortho_png, ortho, cont, foot, meas, linework, title, sub, scale, mm, A2, elements)
         pdf.savefig(fig)
         fig.savefig(str(path.with_name(f"site_plan_page{n + 1}.png")), dpi=60)   # the sheet as a picture (app previews)
         plt.close(fig)
@@ -224,11 +345,136 @@ def write_pdf(path: Path, ortho_png: Path, ortho: dict, cont, foot, meas, title:
     return scale
 
 
-def draw_page(fig, ax, page, ortho_png, ortho, cont, foot, meas, linework, title, sub, scale, mm, A2):
+def draw_elements(ax, elements: dict | None, page: str) -> None:
+    """Named elements. The ortho page shows everything that is not minor; the line drawing shows your marks (as outlines)
+    and the planting the inventory found, so the drawing stays a drawing."""
+    from matplotlib.patches import Polygon
+    for el in (elements or {}).get("elements", []):
+        if el.get("minor"):
+            continue
+        if page == "lines" and el.get("source") != "mark" and el.get("cls") not in ("tree", "bush", "stairs"):
+            continue
+        pts = np.array(el.get("points") or [])
+        if len(pts) == 0:
+            continue
+        col = el.get("color", "#d97757")
+        if el.get("shape") == "polygon" and len(pts) >= 3:
+            ax.add_patch(Polygon(pts, closed=True, fill=page == "ortho" and el.get("cls") != "area", fc=col, alpha=0.35, ec=col, lw=1.1 if page == "lines" else 0.9, zorder=3))
+        elif len(pts) >= 2:
+            ax.plot(pts[:, 0], pts[:, 1], color=col, lw=1.8 if el["cls"] in ("wall", "fence") else 1.0, solid_capstyle="round", zorder=3)
+        else:
+            ax.plot(pts[0, 0], pts[0, 1], "o", color=col, ms=4, zorder=3)
+        c = pts.mean(axis=0)
+        label = el.get("name") or el.get("cls", "")
+        if el.get("area_m2") and el["cls"] == "area":
+            label += f"\n{el['area_m2']:.1f} m²"
+        ax.text(c[0], c[1], label, fontsize=5.5, ha="center", va="center", color="#222", zorder=6,
+                bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85))
+
+
+def draw_boundary_structure(ax, elements, page):
+    """The chosen boundary edge by edge (wall thick, fence thin with ticks, unknown plain) and its windows and doors."""
+    structure = elements or {}
+    chosen = structure.get("boundaries", {}).get(structure.get("boundary_source", ""))
+    if not chosen:
+        return
+    for e in chosen["edges"]:
+        a, b = np.array(e["a"]), np.array(e["b"])
+        if e["cls"] == "wall":
+            ax.plot([a[0], b[0]], [a[1], b[1]], color="black", lw=2.6, solid_capstyle="butt", zorder=4)
+        elif e["cls"] == "fence":
+            ax.plot([a[0], b[0]], [a[1], b[1]], color="black", lw=1.0, zorder=4)
+            d = b - a; L = max(np.linalg.norm(d), 1e-9); u = d / L; nrm = np.array([-u[1], u[0]])
+            for t in np.arange(0.25, L, 0.5):
+                p = a + u * t
+                ax.plot([p[0] - nrm[0] * 0.12, p[0] + nrm[0] * 0.12], [p[1] - nrm[1] * 0.12, p[1] + nrm[1] * 0.12], color="black", lw=0.7, zorder=4)
+        else:
+            ax.plot([a[0], b[0]], [a[1], b[1]], color="black", lw=1.6, ls=(0, (6, 2)), zorder=4)
+    for op in chosen.get("openings", []):
+        a, b = np.array(op["a"]), np.array(op["b"])
+        d = b - a; L = max(np.linalg.norm(d), 1e-9); nrm = np.array([-d[1], d[0]]) / L * op.get("swing", 1)
+        if op["cls"] == "window":
+            ax.plot([a[0], b[0]], [a[1], b[1]], color="white", lw=2.6, zorder=5)
+            for off in (-0.08, 0.08):
+                ax.plot([a[0] + nrm[0] * off, b[0] + nrm[0] * off], [a[1] + nrm[1] * off, b[1] + nrm[1] * off], color="black", lw=0.8, zorder=6)
+        else:
+            ax.plot([a[0], b[0]], [a[1], b[1]], color="white", lw=3.2, zorder=5)
+            leaf = a + nrm * L
+            ax.plot([a[0], leaf[0]], [a[1], leaf[1]], color="black", lw=0.8, zorder=6)
+            ang = np.linspace(np.arctan2(nrm[1], nrm[0]), np.arctan2(d[1], d[0]), 24)
+            if abs(ang[-1] - ang[0]) > np.pi:
+                ang = np.linspace(np.arctan2(nrm[1], nrm[0]), np.arctan2(d[1], d[0]) + (2 * np.pi if ang[-1] < ang[0] else -2 * np.pi), 24)
+            ax.plot(a[0] + L * np.cos(ang), a[1] + L * np.sin(ang), color="black", lw=0.5, zorder=6)
+        if page != "ortho":
+            ax.text((a[0] + b[0]) / 2 + nrm[0] * 0.3, (a[1] + b[1]) / 2 + nrm[1] * 0.3, op["name"], fontsize=4.5, ha="center", va="center", color="#333", zorder=6)
+
+
+def draw_inner(ax, elements):
+    """The partition of the ground (your areas, clipped into the boundary) as the same black line, each side that is not
+    the boundary dimensioned, each area named with its square metres. No colour: a line drawing."""
+    from shapely.geometry import LineString, Point
+    structure = elements or {}
+    chosen = structure.get("boundaries", {}).get(structure.get("boundary_source", ""))
+    ring = LineString(chosen["points"] + chosen["points"][:1]) if chosen else None
+
+    def on_boundary(a, b):
+        if ring is None:
+            return False
+        mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
+        return all(ring.distance(Point(q)) < 0.12 for q in (a, b, mid))
+
+    for lu in structure.get("landuse", []):
+        if lu["material"] == "unassigned":
+            continue
+        for part in lu["polygons"]:
+            ext = part["exterior"]
+            n = len(ext)
+            c = np.mean(np.array(ext), axis=0)
+            for i in range(n):
+                a, b = np.array(ext[i]), np.array(ext[(i + 1) % n])
+                if on_boundary(a, b):
+                    continue
+                ax.plot([a[0], b[0]], [a[1], b[1]], color="black", lw=1.1, solid_capstyle="round", zorder=4)
+                L = float(np.linalg.norm(b - a))
+                if L < 0.5:
+                    continue
+                d = (b - a) / L
+                nrm = np.array([-d[1], d[0]])
+                if np.dot(c - a, nrm) < 0:
+                    nrm = -nrm
+                mid = (a + b) / 2 + nrm * 0.35
+                ang = np.degrees(np.arctan2(d[1], d[0]))
+                if ang > 90 or ang < -90:
+                    ang += 180
+                ax.text(mid[0], mid[1], f"{L:.2f}", fontsize=5.5, rotation=ang, ha="center", va="center", color="black",
+                        bbox=dict(boxstyle="round,pad=0.1", fc="white", ec="none", alpha=0.9), zorder=5)
+            for h in part["holes"]:
+                H = np.array(h + h[:1])
+                ax.plot(H[:, 0], H[:, 1], color="black", lw=1.1, zorder=4)
+            if lu["area_m2"] >= 1:
+                ax.text(c[0], c[1], f"{lu['name'].upper()}\n{lu['area_m2']:.1f} m²", fontsize=6.5, ha="center", va="center", color="black", zorder=6,
+                        bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85))
+
+
+def draw_page(fig, ax, page, ortho_png, ortho, cont, foot, meas, linework, title, sub, scale, mm, A2, elements=None):
     import matplotlib.pyplot as plt
     from matplotlib.patches import Polygon
     x0, y1, w, h = ortho["x_min"], ortho["y_max"], ortho["width_m"], ortho["height_m"]
     y0, x1 = y1 - h, x0 + w
+    chosen = (elements or {}).get("boundaries", {}).get((elements or {}).get("boundary_source", ""))
+    if page == "inner":
+        draw_inner(ax, elements)
+        draw_elements(ax, elements, "lines")
+    elif page == "ortho":
+        draw_elements(ax, elements, page)
+    draw_boundary_structure(ax, elements, page)
+    q = (elements or {}).get("quantities") or {}
+    if q:
+        lines = ["QUANTITIES"] + [f"{m}: {a_:.1f} m²" for m, a_ in sorted(q.get("areas", {}).items(), key=lambda kv: -kv[1])]
+        lines += [f"{c}: {l:.1f} m" for c, l in q.get("lengths", {}).items()]
+        lines += [f"{c}: {n}" for c, n in sorted(q.get("counts", {}).items()) if c not in ("area", "wall", "fence")]
+        fig.text((A2[0] - MARGIN - 6) / A2[0], (MARGIN + TITLE_H + 6) / A2[1], "\n".join(lines), fontsize=6, ha="right", va="bottom",
+                 family="monospace", bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="#66655c", lw=0.5))
     if page == "ortho":
         im = plt.imread(str(ortho_png))
         ax.imshow(im, extent=[x0, x1, y0, y1], interpolation="bilinear", zorder=0)
@@ -253,13 +499,16 @@ def draw_page(fig, ax, page, ortho_png, ortho, cont, foot, meas, linework, title
     for poly in foot:
         ax.add_patch(Polygon(poly, closed=True, fill=False, ls="--", lw=0.6, ec="#2a6f97" if page == "ortho" else "#9a9a9a", zorder=2))
     for seg in (linework or {}).get("walls", []):
-        ax.plot([seg[0][0], seg[1][0]], [seg[0][1], seg[1][1]], color="black", lw=1.6 if page == "lines" else 1.1, solid_capstyle="round", zorder=3)
+        if page != "ortho" and chosen:
+            continue                                            # the drawing pages carry one line: the boundary itself
+        ax.plot([seg[0][0], seg[1][0]], [seg[0][1], seg[1][1]], color="#d97757" if page == "ortho" else "black", lw=1.1, solid_capstyle="round", zorder=3)
     for seg in (linework or {}).get("edges", []):
         ax.plot([seg[0][0], seg[1][0]], [seg[0][1], seg[1][1]], color="#333333" if page == "lines" else "#555555", lw=0.6, zorder=3)
     for k, poly in enumerate((linework or {}).get("polygons", [])):
         P = np.array(poly["points"] + [poly["points"][0]])
-        ax.plot(P[:, 0], P[:, 1], color="black", lw=2.0 if k == 0 else 0.9, solid_joinstyle="miter", zorder=4)
-        if page == "lines":
+        if not (k == 0 and chosen):
+            ax.plot(P[:, 0], P[:, 1], color="black", lw=2.0 if k == 0 else 0.9, solid_joinstyle="miter", zorder=4)
+        if page in ("lines", "inner"):
             for i, L in enumerate(poly["lengths"]):
                 if L < 0.5:
                     continue
@@ -288,8 +537,9 @@ def draw_page(fig, ax, page, ortho_png, ortho, cont, foot, meas, linework, title
                                          fc="black" if i % 2 == 0 else "white", ec="black", lw=0.5))
         fig.text(fx(bx + i * mm), fy(by - 1), f"{i}", ha="center", va="top", fontsize=6)
     fig.text(fx(bx + 5 * mm), fy(by - 1), "5 m", ha="center", va="top", fontsize=6)
-    fig.text(fx(MARGIN), fy(MARGIN + 12), title + ("  ·  line drawing" if page == "lines" else ""), fontsize=16, fontweight="bold", va="bottom", family="serif")
-    detail = f"contours every {CONTOUR_INTERVAL} m" if page == "ortho" else "walls and fences traced from height steps"
+    fig.text(fx(MARGIN), fy(MARGIN + 12), title + ("  ·  outer" if page == "lines" else "  ·  inner" if page == "inner" else ""), fontsize=16, fontweight="bold", va="bottom", family="serif")
+    detail = (f"contours every {CONTOUR_INTERVAL} m" if page == "ortho" else "the boundary and the partition of the ground, every side dimensioned" if page == "inner"
+              else "the boundary from the perimeter walls; thick = wall, ticked = fence, dashed = no wall found")
     fig.text(fx(MARGIN), fy(MARGIN + 4), f"{sub}  ·  scale 1:{scale} on A2 {'landscape' if A2[0] > A2[1] else 'portrait'}  ·  {detail}  ·  grid 1 m  ·  north up",
              fontsize=7, va="bottom", color="#66655c")
 
@@ -306,6 +556,7 @@ def main() -> int:
     ap.add_argument("--scale", type=int, default=100, help="wanted sheet scale 1:N (auto-reduced if it does not fit A2)")
     ap.add_argument("--title", default="Site plan")
     ap.add_argument("--subtitle", default="")
+    ap.add_argument("--boundary", default="walls", choices=["walls", "footprint"], help="which traced boundary the plan is built on")
     a = ap.parse_args()
     CONTOUR_INTERVAL = a.contour
     work = Path(a.work)
@@ -325,8 +576,26 @@ def main() -> int:
     sub = a.subtitle or f"existing conditions · {date.today().isoformat()}"
     lw_path = work / "linework.json"
     linework = json.load(open(lw_path)) if lw_path.exists() else None
-    write_dxf(work / "site_plan.dxf", ortho, cont, foot, meas, a.title, sub, linework)
-    scale = write_pdf(work / "site_plan.pdf", work / "orthomosaic.png", ortho, cont, foot, meas, a.title, sub, a.scale, linework)
+    el_path = work / "elements.json"
+    elements = json.load(open(el_path)) if el_path.exists() else None
+    if elements and linework is not None and elements.get("boundaries"):
+        chosen = elements["boundaries"].get(a.boundary) or elements["boundaries"].get(elements.get("boundary_source", ""))
+        if chosen:
+            elements["boundary_source"] = a.boundary if a.boundary in elements["boundaries"] else elements.get("boundary_source")
+            polys0 = {"points": chosen["points"], "lengths": chosen["lengths"], "area": chosen["area"]}
+            linework = {**linework, "polygons": [polys0] + list(linework.get("polygons", [])[1:]),
+                        "walls_all": linework.get("walls", []), "walls": elements.get("walls_interior", linework.get("walls", []))}
+    if elements and elements.get("override_walls") and linework is not None:
+        # marked walls and fences replace the traced wall lines on the drawing
+        marked = [el for el in elements["elements"] if el.get("cls") in ("wall", "fence") and el.get("source") == "mark" and len(el.get("points") or []) >= 2]
+        if marked:
+            segs = []
+            for el in marked:
+                p = el["points"]
+                segs += [[p[i], p[i + 1]] for i in range(len(p) - 1)]
+            linework = {**linework, "walls": segs, "traced_walls": linework.get("walls", [])}
+    write_dxf(work / "site_plan.dxf", ortho, cont, foot, meas, a.title, sub, linework, elements)
+    scale = write_pdf(work / "site_plan.pdf", work / "orthomosaic.png", ortho, cont, foot, meas, a.title, sub, a.scale, linework, elements)
     polys = (linework or {}).get("polygons", [])
     align = 0.0
     if polys:                                             # the longest boundary side becomes horizontal in the app's default view
@@ -337,7 +606,11 @@ def main() -> int:
                "width_m": ortho["width_m"], "height_m": ortho["height_m"], "contour_interval": a.contour, "sheet_scale": scale,
                "contours": cont, "footprint": foot, "measurements": meas,
                "walls": (linework or {}).get("walls", []), "edges": (linework or {}).get("edges", []),
-               "polygons": polys, "axis_deg": (linework or {}).get("axis_deg"), "align_deg": align}, open(work / "overlay.json", "w"))
+               "polygons": polys, "axis_deg": (linework or {}).get("axis_deg"), "align_deg": align,
+               "elements": (elements or {}).get("elements", []), "quantities": (elements or {}).get("quantities", {}),
+               "boundary_source": (elements or {}).get("boundary_source"), "boundaries": (elements or {}).get("boundaries", {}),
+               "landuse": (elements or {}).get("landuse", []), "walls_all": (linework or {}).get("walls_all", (linework or {}).get("walls", []))},
+              open(work / "overlay.json", "w"))
     print(f"site plan: {len(cont)} contour lines every {a.contour} m, {len(foot)} footprint polygon(s), {len(meas)} measurements, "
           f"DEM {meta['width']}x{meta['height']} @ {a.cell} m, sheet 1:{scale}")
     return 0

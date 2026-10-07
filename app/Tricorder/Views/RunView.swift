@@ -49,6 +49,7 @@ struct RunView: View {
     private var inputAsset: AssetRecord? { run.inputAssetId.flatMap { env.asset($0) } }
     private var inputRecordings: [RecordingRecord] { run.inputRecordingIds.compactMap { env.recording($0) } }
     private var outputAsset: AssetRecord? { run.outputAsset.flatMap { env.asset($0) } }
+    private var outputRecording: RecordingRecord? { run.outputAsset.flatMap { env.recording($0) } }
     private var parentRun: RunRecord? { run.waitsFor.flatMap { env.run($0) } }
     private var dependants: [RunRecord] { env.runsWaiting(on: run.id) }
 
@@ -104,7 +105,7 @@ struct RunView: View {
             header
             ForEach(Format.warnings(recording: inputRecordings.first?.rec, run: run), id: \.self) { WarningBanner(text: $0) }
             if run.isQueued, let p = parentRun {
-                WarningBanner(text: "Queued: this run starts by itself when run \(p.run.id) (\(p.run.kind.label), \(p.run.status.rawValue)) publishes its \(p.run.kind.outputKind.label.lowercased()).")
+                WarningBanner(text: "Queued: this run starts by itself when run \(p.run.id) (\(p.run.kind.label), \(p.run.status.rawValue)) publishes its \(p.run.kind.outputLabel.lowercased()).")
             }
             rail
             cards
@@ -176,7 +177,7 @@ struct RunView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Inputs").font(.caption).foregroundStyle(.secondary)
             if let p = parentRun, run.inputAssetId == nil {
-                inputChip(symbol: run.kind.outputKind.symbol, name: "model from \(p.run.id)", faded: true) { ws.open(.run(env.id, p.run.id)) }
+                inputChip(symbol: p.run.kind.outputSymbol, name: "\(p.run.kind.outputLabel.lowercased()) from \(p.run.id)", faded: true) { ws.open(.run(env.id, p.run.id)) }
             }
             if let a = inputAsset {
                 inputChip(symbol: a.asset.kind.symbol, name: a.asset.name, faded: false) { ws.open(.asset(env.id, a.asset.id)) }
@@ -192,8 +193,10 @@ struct RunView: View {
             Text("Output").font(.caption).foregroundStyle(.secondary)
             if let a = outputAsset {
                 inputChip(symbol: a.asset.kind.symbol, name: a.asset.name, faded: false) { ws.open(.asset(env.id, a.asset.id)) }
+            } else if let r = outputRecording {
+                inputChip(symbol: "tag", name: r.rec.name, faded: false) { ws.open(.recording(env.id, r.rec.id)) }
             } else {
-                inputChip(symbol: run.kind.outputKind.symbol, name: running ? "\(run.kind.outputKind.label) · working…" : "\(run.kind.outputKind.label) · not published", faded: true, action: nil)
+                inputChip(symbol: run.kind.outputSymbol, name: running ? "\(run.kind.outputLabel) · working…" : "\(run.kind.outputLabel) · not published", faded: true, action: nil)
             }
         }
     }

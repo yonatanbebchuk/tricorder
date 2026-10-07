@@ -18,11 +18,15 @@ Open source end to end, runs on an Apple Silicon Mac, no NVIDIA GPU.
 
 ## How it works
 
-Three kinds of run, each a recipe with input slots. A **scan** turns a video into a 3D model. An **extend scan**
-registers new videos or photos into an existing 3D model and re-meshes it. A **layout** turns a 3D model plus tape
-measurements into a site plan. "Site plan from video" chains a scan and a layout. Everything is a stage script under
-`scripts/`, orchestrated by `tricorder/pipeline.py`; every stage leaves a preview picture and a file list behind,
-which is what the app's run page shows.
+Five kinds of run, each a recipe with input slots. A **scan** turns a video into a 3D model. An **extend scan**
+registers new videos or photos into an existing 3D model and re-meshes it. An **identify** names what is where on a
+3D model: every region of the frames is segmented, a vision-language model names it, the names are lifted onto the
+mesh and clustered into entities with footprints, published as a generated **marks** recording (the **inventory**).
+A **layout** turns a 3D model plus tape measurements, plus the marks (yours and the inventory), into a site plan with
+named elements, a legend and quantities. An **edit** cuts marked entities or regions out of the model and completes
+the ground where they stood, or fills a hole you right-clicked. "Site plan from video" chains scan, identify and layout; "Clean up" chains edit, identify and layout.
+Everything is a stage script under `scripts/`, orchestrated by `tricorder/pipeline.py`; every stage leaves a preview
+picture and a file list behind, which is what the app's run page shows.
 
 ```
  iPhone video (4K, 30 fps)
@@ -94,9 +98,9 @@ An **environment** is a place you scan. It holds three things, all local and git
 
 | | what | where |
 |---|---|---|
-| **Recordings** | raw sensed data: an iPhone video (copied in, its metadata, the frames extracted from it), a set of photos, or tape measurements marked on a video's frames | `work/environments/<env>/recordings/<rec>/` |
+| **Recordings** | raw sensed data: an iPhone video (copied in, its metadata, the frames extracted from it), a set of photos, tape measurements marked on a video's frames or on the mesh, or **marks** drawn on a 3D model (elements and edits, in the model's frame) | `work/environments/<env>/recordings/<rec>/` |
 | **Runs** | processing jobs, each a recipe with input slots. A **scan** turns a video recording into a 3D model; an **extend scan** registers new videos or photos into a 3D model and re-meshes it; a **layout** turns a 3D model plus measurement recordings into a site plan. A run has stages (each with its metrics, files and a preview picture), logs, settings and working files, and publishes exactly one asset. A run can wait for another's output (`@r5`) and is launched when it publishes: that is how "Site plan from video" chains a scan and a layout | `work/environments/<env>/runs/<run>/` |
-| **Assets** | what runs produce: a **3D Model** (`model3d`) or a **Site Plan** (`site_plan`). Files are APFS clones of the run's deliverables, so an asset costs no extra disk | `work/environments/<env>/assets/<asset>/` |
+| **Assets** | what runs produce: a **3D Model** (`model3d`) or a **Site Plan** (`site_plan`). Files are APFS clones of the run's deliverables, so an asset costs no extra disk. (An identify run publishes a recording instead: the inventory is generated marks) | `work/environments/<env>/assets/<asset>/` |
 
 Assets are never overwritten: laying out again publishes `site_plan-2` and `site_plan-1` stays as history. The
 newest asset of each kind is the environment's *current* state. Runs consume earlier assets (a layout consumes a
@@ -152,11 +156,19 @@ python -m tricorder.pipeline new-run backyard extend --asset model3d-1 --recordi
 python -m tricorder.pipeline new-run backyard layout --asset @r5 --recordings rec2            # chained: runs when r5 publishes
 python -m tricorder.previews backyard r1                                                       # stage previews for an older run
 python -m tricorder.pipeline new-measurements backyard --name "Tape, Saturday"   # then add items in the app
+python -m tricorder.pipeline new-run backyard identify --asset model3d-1 --vlm qwen-local --start   # what is where
+python -m tricorder.pipeline new-marks backyard --model model3d-1 --name "Elements"              # then draw in Full View
+python -m tricorder.pipeline new-run backyard layout --asset model3d-1 --recordings rec2 --marks rec5 rec6 --start   # rec6: the inventory
+python -m tricorder.pipeline new-run backyard edit --asset model3d-1 --marks rec5 rec6 --start                        # remove, patch
+python -m tricorder.pipeline new-run backyard identify --asset model3d-2 --prior rec6 --start                        # re-lift onto an edited model
 make migrate                                                    # old work/scans layout -> work/environments
 ```
 
 Makefile variables: `FPS`, `MAXF` (frames), `RES_LEVEL` (dense 1/2/3), `FEATURES`, `MATCHER`, `MATCHING`,
 `MEASURES` (prompts to ask for), `PXM` (orthomosaic px/m). `run_all.sh <video> [name]` is a thin wrapper around `new`.
+Identify settings: `--vlm qwen-local|claude|none`, `--every N`, `--frames-cap N`, `--sam <checkpoint>`, `--review 0|1`.
+The identify and edit runs need the `identify` extra: `uv pip install -e ".[identify]"` (torch, transformers, mlx-vlm, anthropic).
+Design notes for this phase: [docs/INVENTORY_AND_EDITS.md](docs/INVENTORY_AND_EDITS.md).
 
 ## Capturing the video
 
@@ -284,6 +296,17 @@ Layout settings (run form or `new-run … layout` flags): `px_per_m`, `contour_m
 `09_trace_lines.py` is the earlier DEM/Hough tracer, kept for reference; the research that replaced it is in
 [docs/SITE_PLAN_RESEARCH.md](docs/SITE_PLAN_RESEARCH.md).
 
+## The plan's structure
+
+The plan is built on the **wall-first boundary** by default: the perimeter walls the tracer found, chained corner to
+corner, with the ground's outline only where no wall stands, so a stair groove or a bay-window indent survives. Every
+edge of it is classed wall, fence or unknown from the elements running along it (your marks count three times the
+inventory) and drawn thick, ticked or dashed; windows and doors are snapped onto the edge they sit on. The areas you
+marked partition the yard (the most specific area wins where they overlap; what is left is unassigned ground). The
+drawing comes in two versions, both one black line with measurements: **outer**, the boundary alone, and **inner**, the
+boundary plus that partition with every side dimensioned; they are pages 2 and 3 of the PDF, layers of the DXF, and a
+switch on the plan page in the app. The layout setting `boundary` switches to the regularised ground footprint when the walls are too sparse.
+
 ## Working with the deliverables
 
 - **QCAD / AutoCAD / Vectorworks**: open `site_plan.dxf`; the orthomosaic sits on `ORTHO` at true scale, the
@@ -309,9 +332,65 @@ of the box; the video track gives the better textured model. You can do both and
 Check the dataset layout against the docstring in `scripts/lidar_fuse.py`; the app's export format has changed
 between versions.
 
+## The identify run: what is where
+
+```
+ 3D model + its registered frames
+        │  13_segment.py          SAM, automatic mode: every region of every n-th frame is a mask (no vocabulary)
+        ▼
+ masks per frame
+        │  14_name.py             the masks drawn as numbered outlines; a vision-language model names each number
+        │                         (set-of-mark prompting): class, material, name, confidence. Qwen2.5-VL on the Mac
+        │                         through MLX, or Claude (--vlm claude, ANTHROPIC_API_KEY or `ant auth login`)
+        ▼
+ named masks
+        │  15_lift.py             mask pixels → rays through the frame's camera → mesh faces (Open3D cast_rays);
+        │                         each hit votes for the label; faces take the label with the most weight
+        │  16_entities.py         connected same-label faces → entities: name, centroid, height, outline, footprint
+        │  17_review.py           each entity outlined on the photo that saw most of it, shown to the model again
+        ▼
+ Inventory: a generated marks recording   entities.json · faces.npy · segments/ · inventory_map.png · one item per entity
+```
+
+Names that disagree across views lose, one-off hallucinations lose; the per-face vote is what makes a hundred
+imperfect 2D answers into one 3D inventory. Sizes are approximate until a layout sets the scale (the identify run
+estimates it from the camera height). An identify given a *prior inventory* skips segmenting and naming and only
+re-lifts the prior's masks onto the new mesh, which is how an inventory follows a model through an edit.
+
+## Marks and the full view
+
+Open a 3D model in **Full View** (toolbar; **Mark Up** starts a fresh marks recording) and the mesh fills the page.
+The inventory's entities are drawn over it as proposals: click inside one to select it, then **Accept**, **Reject** or
+**Remove**; or right-click anything: an entity offers Remove and Remove & Run Edit, a hole offers Patch Here, one of
+your edit polygons offers Run Edit Now. On the model page itself, Inventory and Marks toggle on and off over the viewer. With the **Mark** tool, every click
+lands a dot on the surface; dots join into a line (walls and fences, along their base) or close into a polygon (areas,
+stairs, objects), and a class and name make it an element. With **Measure**, two clicks plus the taped metres make a
+measurement with no frame projection at all. With **Edit**, `remove` outlines something to cut out and `patch` outlines
+a hole with a prompt for what belongs there. Everything is saved as you go into a **marks** recording on that model,
+points in the model's own coordinate frame, and a layout or an edit takes that recording as an input.
+
+The coordinate round trip is exact: the preview USDZ is exported with the model's levelling transform and Blender's
+axis conversion, so a SceneKit world point `p` is levelled `(p.x, -p.z, p.y)` and the inverse of
+`transform_preview.json` takes it back to the model frame.
+
+## The edit run
+
+```
+ 3D model + edit marks (+ inventory)
+        │  19_edit_select.py      marks → faces (an entity's faces, or the faces inside a polygon, grown to whole
+        │                         entities); a ground plane fitted to the ring around each footprint; the selection
+        │                         as occupied 4 cm voxels in the levelled frame
+        │  20_edit_cut.py         the voxels' faces out of the clean mesh, their points out of the dense cloud
+        │  21_edit_complete_blender.py  Blender: the same cut on the textured mesh, each footprint filled on its ground
+        │                         plane (constrained Delaunay), a patch material textured from the surrounding ground
+        │  22_edit_fill_cloud.py  the patch textures cloned from the atlas; fill points into the dense cloud
+        ▼
+ 3D Model asset    same frame as the parent (derived_from, removed_entities), so marks and measurements still apply
+```
+
 ## Prototypes
 
-Not wired into the pipeline yet, runnable by hand on a layout run's folder:
+Earlier prototypes, superseded by the identify run but kept for reference, runnable by hand on a layout run's folder:
 
 - `scripts/11_detect_stairs.py`: stairs from geometry. Horizontal surfaces between 0.08 m and 1.5 m are binned by
   height, clustered in plan, and chained where the rise is consistent (0.10-0.22 m); outputs treads, rise, run,

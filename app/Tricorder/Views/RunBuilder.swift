@@ -9,23 +9,35 @@ struct Recipe: Identifiable, Hashable {
     let symbol: String
 
     var id: String { steps.map(\.rawValue).joined(separator: "+") }
-    var output: AssetKind { steps.last!.outputKind }
+    var outputLabel: String { steps.last!.outputLabel }
+    var outputSymbol: String { steps.last!.outputSymbol }
 
     static let all: [Recipe] = [
         Recipe(steps: [.scan], label: RunKind.scan.label, blurb: RunKind.scan.blurb, symbol: RunKind.scan.symbol),
         Recipe(steps: [.extend], label: RunKind.extend.label, blurb: RunKind.extend.blurb, symbol: RunKind.extend.symbol),
+        Recipe(steps: [.identify], label: RunKind.identify.label, blurb: RunKind.identify.blurb, symbol: RunKind.identify.symbol),
         Recipe(steps: [.layout], label: RunKind.layout.label, blurb: RunKind.layout.blurb, symbol: RunKind.layout.symbol),
-        Recipe(steps: [.scan, .layout], label: "Site plan from video",
-               blurb: "Scan, then lay out, in one go. Add measurements now for true scale, or later for a re-solve.", symbol: "video.badge.waveform"),
+        Recipe(steps: [.edit], label: RunKind.edit.label, blurb: RunKind.edit.blurb, symbol: RunKind.edit.symbol),
+        Recipe(steps: [.scan, .identify, .layout], label: "Site plan from video",
+               blurb: "Scan, identify what is where, then lay out, in one go. Add measurements now for true scale, or later for a re-solve.", symbol: "video.badge.waveform"),
+        Recipe(steps: [.edit, .identify, .layout], label: "Clean up",
+               blurb: "Remove what you marked, carry the inventory onto the new model, lay it out again.", symbol: "sparkles"),
     ]
     static func single(_ k: RunKind) -> Recipe { all.first { $0.steps == [k] }! }
 
-    /// The slots to fill: every step's slots except the asset slot a previous step feeds.
+    /// The earlier step whose output fills this slot of step `i`, if any: the latest one producing a kind the slot accepts.
+    /// A "prior inventory" slot is fed by an inventory made *before* the model it will be re-lifted onto, so for the
+    /// clean-up chain the identify step's prior comes from the user, not from the chain.
+    func feeder(step i: Int, slot: InputSlot) -> Int? {
+        guard i > 0, slot.key != "prior" else { return nil }
+        return (0..<i).reversed().first { slot.accepts.contains(steps[$0].outputInputKind) }
+    }
+
+    /// The slots to fill: every step's slots except those an earlier step feeds.
     var slots: [RecipeSlot] {
         var out: [RecipeSlot] = []
         for (i, k) in steps.enumerated() {
-            for s in k.slots {
-                if i > 0, s.accepts.contains(steps[i - 1].outputKind.inputKind) { continue }
+            for s in k.slots where feeder(step: i, slot: s) == nil {
                 out.append(RecipeSlot(step: i, slot: s))
             }
         }
@@ -82,7 +94,12 @@ struct NewRunSheet: View {
                         Form {
                             ForEach(Array(recipe.steps.enumerated()), id: \.offset) { _, k in
                                 Section(k.label) {
-                                    if k == .layout { LayoutSettingsForm(settings: $settings) } else { ReconstructSettingsForm(settings: $settings) }
+                                    switch k {
+                                    case .layout: LayoutSettingsForm(settings: $settings)
+                                    case .identify: IdentifySettingsForm(settings: $settings)
+                                    case .edit: EditSettingsForm(settings: $settings)
+                                    case .scan, .extend: ReconstructSettingsForm(settings: $settings)
+                                    }
                                 }
                             }
                             TextField("Label", text: $label, prompt: Text("optional, e.g. learned features"))
@@ -115,7 +132,7 @@ struct NewRunSheet: View {
     // MARK: recipes
 
     private var recipes: some View {
-        HStack(spacing: 10) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 215, maximum: 320), spacing: 10)], alignment: .leading, spacing: 10) {
             ForEach(Recipe.all) { r in
                 let on = r == recipe
                 Button { recipe = r } label: {
@@ -123,7 +140,7 @@ struct NewRunSheet: View {
                         Image(systemName: r.symbol).font(.title3).foregroundStyle(on ? Theme.accent : .secondary).frame(width: 24)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(r.label).font(.headline).lineLimit(1)
-                            Text(r.steps.map(\.verb).joined(separator: " → ") + " → \(r.output.label)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Text(r.steps.map(\.verb).joined(separator: " → ") + " → \(r.outputLabel)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer(minLength: 0)
                     }
@@ -173,6 +190,11 @@ struct NewRunSheet: View {
 
     private func detail(_ r: RecordingRecord) -> String {
         if r.isMeasurements { return "\(r.rec.items.count) measurement\(r.rec.items.count == 1 ? "" : "s")" + (r.rec.north != nil ? " · north" : "") }
+        if r.isMarks {
+            if r.isGenerated { return "inventory · \(r.rec.marks.count) entities · on \(r.rec.markModel ?? "?")" }
+            let edits = r.rec.marks.filter(\.isEdit).count
+            return "\(r.rec.marks.count) mark\(r.rec.marks.count == 1 ? "" : "s")" + (edits > 0 ? " · \(edits) edit\(edits == 1 ? "" : "s")" : "") + " · on \(r.rec.markModel ?? "?")"
+        }
         return Format.videoLine(r.rec.source) + (r.rec.frames.status == .done ? "" : " · frames \(r.rec.frames.status.rawValue)")
     }
 
@@ -223,19 +245,43 @@ struct NewRunSheet: View {
     }
 
     /// Sensible starting point: the request's input, else the newest thing that fits each required slot; every
-    /// measurement recording for a layout.
+    /// measurement recording for a layout; the marks and inventory made on the chosen model.
     private func prefill() {
         guard let env else { return }
         filled = [:]
         if let id = request.inputId {
-            let kind: InputKind = env.asset(id) != nil ? .model3d : (env.recording(id)?.rec.inputKind ?? .video)
+            let kind: InputKind = env.asset(id).map { $0.asset.kind.inputKind } ?? (env.recording(id)?.rec.inputKind ?? .video)
             place(InputRef(kind: kind, id: id))
         }
-        for s in recipe.slots {
-            if s.slot.accepts(.measurements) { for m in env.measurementRecordings { insert(InputRef(kind: .measurements, id: m.rec.id), into: s) } }
-            guard s.slot.isRequired, (filled[s.id] ?? []).isEmpty else { continue }
+        fillGaps(env)
+    }
+
+    /// The model a recipe works on (its first 3D-model slot), if chosen.
+    private var chosenModel: AssetRecord? {
+        guard let env else { return nil }
+        for s in recipe.slots where s.slot.accepts(.model3d) {
+            if let ref = filled[s.id]?.first { return env.asset(ref.id) }
+        }
+        return nil
+    }
+
+    private func fillGaps(_ env: EnvironmentRecord) {
+        for s in recipe.slots where s.slot.isRequired && (filled[s.id] ?? []).isEmpty {
             if s.slot.accepts(.model3d), let a = env.models.last { insert(InputRef(kind: .model3d, id: a.asset.id), into: s) }
             else if s.slot.accepts(.video), let r = env.videoRecordings.last { insert(InputRef(kind: .video, id: r.rec.id), into: s) }
+        }
+        let model = chosenModel
+        for s in recipe.slots where (filled[s.id] ?? []).isEmpty {
+            if s.slot.accepts(.measurements) { for m in env.measurementRecordings { insert(InputRef(kind: .measurements, id: m.rec.id), into: s) } }
+            guard s.slot.accepts(.marks), let model else { continue }
+            if s.slot.key == "prior" {
+                // a lone identify re-lifts a prior inventory only when the model is an edit of one that has an inventory
+                if model.asset.derivedFrom != nil, let inv = env.inventory(for: model) { insert(InputRef(kind: .marks, id: inv.rec.id), into: s) }
+            } else {
+                // every marks recording on this model's frame: your marks and the newest generated inventory
+                for m in env.humanMarks(for: model) { insert(InputRef(kind: .marks, id: m.rec.id), into: s) }
+                if let inv = env.inventory(for: model) { insert(InputRef(kind: .marks, id: inv.rec.id), into: s) }
+            }
         }
     }
 
@@ -244,15 +290,7 @@ struct NewRunSheet: View {
         let old = filled.values.flatMap { $0 }
         filled = [:]
         for ref in old { place(ref) }
-        if let env {
-            for s in recipe.slots where s.slot.accepts(.measurements) && (filled[s.id] ?? []).isEmpty {
-                for m in env.measurementRecordings { insert(InputRef(kind: .measurements, id: m.rec.id), into: s) }
-            }
-            for s in recipe.slots where s.slot.isRequired && (filled[s.id] ?? []).isEmpty {
-                if s.slot.accepts(.model3d), let a = env.models.last { insert(InputRef(kind: .model3d, id: a.asset.id), into: s) }
-                else if s.slot.accepts(.video), let r = env.videoRecordings.last { insert(InputRef(kind: .video, id: r.rec.id), into: s) }
-            }
-        }
+        if let env { fillGaps(env) }
     }
 
     private func start() {
@@ -260,8 +298,12 @@ struct NewRunSheet: View {
         var steps: [RunStep] = []
         for (i, k) in recipe.steps.enumerated() {
             var inputs: [String: [String]] = [:]
-            for s in recipe.slots where s.step == i { inputs[s.slot.key] = (filled[s.id] ?? []).map(\.id) }
-            steps.append(RunStep(kind: k, inputs: inputs, settings: settings, label: label))
+            var refs: [String: Int] = [:]
+            for s in k.slots {
+                if let j = recipe.feeder(step: i, slot: s) { refs[s.key] = j }
+                else if let rs = recipe.slots.first(where: { $0.step == i && $0.slot.key == s.key }) { inputs[s.key] = (filled[rs.id] ?? []).map(\.id) }
+            }
+            steps.append(RunStep(kind: k, inputs: inputs, settings: settings, label: label, refs: refs))
         }
         Task {
             let ok = await ws.createRuns(env: request.envId, steps: steps)
@@ -372,7 +414,7 @@ struct RecipeRail: View {
         HStack(spacing: 0) {
             ForEach(Array(recipe.steps.enumerated()), id: \.offset) { i, k in
                 if i > 0 {
-                    node(symbol: recipe.steps[i - 1].outputKind.symbol, text: recipe.steps[i - 1].outputKind.label, strong: true)
+                    node(symbol: recipe.steps[i - 1].outputSymbol, text: recipe.steps[i - 1].outputLabel, strong: true)
                     connector
                 }
                 ForEach(Array(k.stages.enumerated()), id: \.offset) { j, s in
@@ -381,7 +423,7 @@ struct RecipeRail: View {
                 }
                 connector
             }
-            node(symbol: recipe.output.symbol, text: recipe.output.label, strong: true)
+            node(symbol: recipe.outputSymbol, text: recipe.outputLabel, strong: true)
         }
         .padding(.vertical, 10).padding(.horizontal, 12)
         .frame(maxWidth: .infinity)

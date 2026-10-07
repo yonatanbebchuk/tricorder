@@ -80,7 +80,43 @@ enum Format {
             if let a = m.double("boundary_area_m2") { p.append(String(format: "%.0f m²", a)) }
         case "draw":
             if let c = m.int("contours") { p.append("\(c) contours") }
+            if let e = m.int("elements"), e > 0 { p.append("\(e) elements") }
             if let s = m.int("sheet_scale") { p.append("1:\(s)") }
+        case "annotate":
+            if let e = m.int("elements") { p.append("\(e) elements") }
+            if let k = m.int("from_marks"), k > 0 { p.append("\(k) from marks") }
+            if let l = m.int("landuse"), l > 0 { p.append("\(l) land uses") }
+            if let o = m.int("openings"), o > 0 { p.append("\(o) openings") }
+            if let b = m.string("boundary") { p.append("boundary: \(b)") }
+        case "segment":
+            if let f = m.int("frames") { p.append("\(f) frames") }
+            if let n = m.int("masks") { p.append("\(n) masks") }
+            if let c = m.string("carried_from") { p.append("carried from \(c)") }
+        case "name":
+            if let n = m.int("named") { p.append("\(n) named") }
+            if let v = m.string("vlm") { p.append(v) }
+            if let s = m.double("seconds_per_frame") { p.append(String(format: "%.0f s/frame", s)) }
+        case "lift":
+            if let n = m.int("labelled_faces"), let f = m.int("faces"), f > 0 { p.append(String(format: "%.1f%% of faces labelled", 100 * Double(n) / Double(f))) }
+            if let l = m.int("labels") { p.append("\(l) labels") }
+        case "entities":
+            if let n = m.int("entities") { p.append("\(n) entities") }
+            if case .object(let o)? = m["classes"] { p.append(o.map { "\($0.value.int ?? 0) \($0.key)" }.sorted().joined(separator: ", ")) }
+        case "review":
+            if m.bool("skipped") == true { p.append("skipped") }
+            if let n = m.int("reviewed") { p.append("\(n) reviewed") }
+            if let r = m.int("renamed"), r > 0 { p.append("\(r) renamed") }
+            if let d = m.int("doubted"), d > 0 { p.append("\(d) doubted") }
+        case "select":
+            if let r = m.int("removes") { p.append("\(r) remove\(r == 1 ? "" : "s")") }
+            if let k = m.int("patches"), k > 0 { p.append("\(k) patch\(k == 1 ? "" : "es")") }
+            if let f = m.int("faces") { p.append("\(f) faces") }
+        case "cut":
+            if let f = m.int("faces_removed") { p.append("\(f) faces removed") }
+            if let n = m.double("points_removed"), n > 0 { p.append(String(format: "%.1fM points removed", n / 1e6)) }
+        case "complete":
+            if let f = m.int("faces_added") { p.append("\(f) faces added") }
+            if let n = m.int("points_added"), n > 0 { p.append("\(n) points added") }
         case "preview":
             if let f = m.double("faces"), f > 0 { p.append(String(format: "%.0fk faces", f / 1e3)) }
             if let s = m.int("size"), s > 0 { p.append(size(s)) }
@@ -95,7 +131,9 @@ enum Format {
         switch kind {
         case .scan: return "\(s.features)+\(s.matcher == "LIGHTGLUE" ? "LightGlue" : "BF") · \(s.matching) · dense L\(s.resLevel) · \(s.measures) meas."
         case .extend: return "\(s.features)+\(s.matcher == "LIGHTGLUE" ? "LightGlue" : "BF") · dense L\(s.resLevel) · \(s.measures) meas."
-        case .layout: return "\(s.pxPerM) px/m · contours \(number(s.contourM)) m · 1:\(s.sheetScale)"
+        case .identify: return "\(s.vlm) · every \(s.every)th frame, up to \(s.framesCap) · \(s.review == 1 ? "review" : "no review")"
+        case .layout: return "\(s.pxPerM) px/m · contours \(number(s.contourM)) m · 1:\(s.sheetScale) · boundary: \(s.boundary)"
+        case .edit: return "voxel cut · ground fill · \(s.previewFaces / 1000)k preview"
         }
     }
 
@@ -114,9 +152,21 @@ enum Format {
             if let s = m.double("scale") { t.append((String(format: "%.4f", s), "m per model unit")) }
             if let n = m.int("measurements") { t.append(("\(n)", "measurements")) }
             if let r = m.double("max_residual_cm") { t.append((String(format: "±%.1f cm", r), "worst residual")) }
+            if let e = m.int("elements"), e > 0 { t.append(("\(e)", "elements")) }
             if let c = m.int("contours") { t.append(("\(c)", "contour lines")) }
             if let s = m.int("sheet_scale") { t.append(("1:\(s)", "sheet scale")) }
         }
+        return t
+    }
+
+    /// A generated inventory's numbers as tiles.
+    static func inventoryTiles(_ r: Recording) -> [(String, String)] {
+        let m = r.source.metrics ?? [:]
+        var t: [(String, String)] = [("\(r.marks.count)", "entities")]
+        if let f = m.int("frames") { t.append(("\(f)", "frames segmented")) }
+        if let k = m.int("masks") { t.append(("\(k)", "masks named")) }
+        if let v = m.string("vlm") { t.append((v, "named by")) }
+        if let n = m.int("reviewed"), n > 0 { t.append(("\(n)", "reviewed")) }
         return t
     }
 

@@ -362,6 +362,8 @@ def regularize_polygon(poly, fams, tol: float = 20.0):
     as the intersections of consecutive edge lines.  Our own version of 'regularize building footprint' that
     allows more than one axis family."""
     from shapely.geometry import Polygon
+    if poly.geom_type == "MultiPolygon":                 # an earlier step split it: keep the largest piece
+        poly = max(poly.geoms, key=lambda g: g.area)
     xy = np.array(poly.exterior.coords)[:-1]
     n = len(xy)
     edges = []
@@ -518,14 +520,20 @@ def ring_section(ring, t0: float, t1: float, step: float = 0.5, simplify: float 
     return [np.array(q) for q in simp[1:-1]]
 
 
-def wall_first_boundary(foot, walls, fams, min_edge: float, min_angle: float = 25.0, max_ext: float = 3.0, straight_gap: float = 3.0):
+def wall_first_boundary(foot, walls, fams, min_edge: float, min_angle: float = 25.0, max_ext: float = 3.0, straight_gap: float = 3.0,
+                        perimeter_dist: float = 2.0, perimeter_angle: float = 40.0):
     """The boundary an architect would trace: the perimeter walls themselves, joined at their corners. Where two
     consecutive walls meet at an angle their lines are intersected; near-parallel neighbours are joined by a jog;
     a long stretch with no wall (a hedge, a gap in coverage) is bridged with the ground footprint's outline.
     Returns (polygon, perimeter wall count) or (None, n) when there is not enough wall to go around."""
     from shapely.geometry import LineString, Polygon
-    ring = LineString(list(foot.simplify(0.3).exterior.coords))
-    pw = perimeter_walls(walls, ring, min_len=1.5)
+    if foot.geom_type == "MultiPolygon":
+        foot = max(foot.geoms, key=lambda g: g.area)
+    simple = foot.simplify(0.3)
+    if simple.geom_type == "MultiPolygon":
+        simple = max(simple.geoms, key=lambda g: g.area)
+    ring = LineString(list(simple.exterior.coords))
+    pw = perimeter_walls(walls, ring, max_dist=perimeter_dist, min_len=1.5, ang_tol=perimeter_angle)
     if len(pw) < 3:
         return None, len(pw)
     n = len(pw)
@@ -568,9 +576,10 @@ def wall_first_boundary(foot, walls, fams, min_edge: float, min_angle: float = 2
         else:
             pts.append(w["b"])
             if gap > straight_gap:
-                # follow the ground's outline only when it does not wander far from the straight bridge
+                # a long stretch with no wall (the passage beside the house, a hedge): follow the ground's outline, which
+                # may go a long way round (down a passage and back) before it straightens into a bridge
                 detour = (nx["ta"] - w["tb"]) % ring.length
-                if detour < 1.6 * gap:
+                if detour < max(3.0 * gap, 12.0):
                     pts += ring_section(ring, w["tb"], nx["ta"])
     poly = Polygon(pts).buffer(0)
     if poly.geom_type == "MultiPolygon":
@@ -610,6 +619,9 @@ def main() -> int:
     ap.add_argument("--join", type=float, default=2.5, help="endpoints this close to another line are extended to meet it (m)")
     ap.add_argument("--extend", type=float, default=0.15, help="small extension so met corners overlap when noding (m)")
     ap.add_argument("--min-edge", type=float, default=1.2, help="boundary jogs shorter than this are absorbed (m)")
+    ap.add_argument("--wall-boundary-min-edge", type=float, default=0.4, help="the wall-first boundary keeps jogs down to this (m): stair grooves, window bays")
+    ap.add_argument("--perimeter-dist", type=float, default=2.0, help="a wall this close to the ground's outline counts as perimeter (m)")
+    ap.add_argument("--perimeter-angle", type=float, default=40.0, help="and within this angle of the outline's direction (deg)")
     ap.add_argument("--out", default="linework.json")
     a = ap.parse_args()
     work = Path(a.work)
@@ -651,7 +663,11 @@ def main() -> int:
     # three fence sides exactly right and the house side and passage wrong, so the footprint boundary stays the drawing
     wall_boundary = []
     if foot:
-        wb, n_perimeter = wall_first_boundary(foot[0], segs, fams, a.min_edge)
+        try:
+            wb, n_perimeter = wall_first_boundary(foot[0], segs, fams, a.wall_boundary_min_edge, perimeter_dist=a.perimeter_dist, perimeter_angle=a.perimeter_angle)
+        except Exception as e:                        # the wall-first boundary is an extra; the footprint one is the fallback
+            print(f"wall-first boundary failed: {e}")
+            wb, n_perimeter = None, 0
         if wb is not None:
             wall_boundary = [wb]
             print(f"wall-first boundary from {n_perimeter} perimeter walls: {wb.area:.1f} m², {len(wb.exterior.coords) - 1} sides (kept as wall_boundary)")

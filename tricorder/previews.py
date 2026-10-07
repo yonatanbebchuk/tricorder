@@ -197,8 +197,80 @@ def preview_draw(run: Run, dst: Path) -> bool:
     return _thumb(run.dir / "site_plan_page1.png", dst, 1200)
 
 
+def _first_som(run: Run) -> Path | None:
+    files = sorted((run.dir / "segments").glob("som_*.jpg")) if (run.dir / "segments").exists() else []
+    return files[len(files) // 2] if files else None
+
+
+def preview_segment(run: Run, dst: Path) -> bool:
+    return _thumb(run.dir / "segments" / "preview.jpg", dst)
+
+
+def preview_name(run: Run, dst: Path) -> bool:
+    som = _first_som(run)
+    return bool(som) and _thumb(som, dst)
+
+
+def preview_lift(run: Run, dst: Path) -> bool:
+    return _thumb(run.dir / "lift_map.png", dst)
+
+
+def preview_entities(run: Run, dst: Path) -> bool:
+    return _thumb(run.dir / "inventory_map.png", dst)
+
+
+def preview_review(run: Run, dst: Path) -> bool:
+    return _thumb(run.dir / "review" / "montage.jpg", dst)
+
+
+def preview_annotate(run: Run, dst: Path) -> bool:
+    """The elements over the orthomosaic, each filled in its class colour and named."""
+    ej, oj, png = run.dir / "elements.json", run.dir / "orthomosaic.json", run.dir / "orthomosaic.png"
+    if not (ej.exists() and oj.exists()):
+        return False
+    E, o = json.load(open(ej)), json.load(open(oj))
+    x0, y1, w, h = o["x_min"], o["y_max"], o["width_m"], o["height_m"]
+    plt = _plt()
+    fig = plt.figure(figsize=(9.6, 9.6 * h / max(w, 1e-6)))
+    ax = fig.add_axes([0, 0, 1, 1])
+    if png.exists():
+        ax.imshow(plt.imread(str(png)), extent=(x0, x0 + w, y1 - h, y1), alpha=0.3, interpolation="bilinear")
+    for el in E.get("elements", []):
+        pts = np.array(el.get("points", []))
+        if len(pts) == 0:
+            continue
+        col = el.get("color", "#d97757")
+        if el.get("shape") == "polygon" and len(pts) >= 3:
+            ax.fill(pts[:, 0], pts[:, 1], color=col, alpha=0.35, lw=0)
+            ax.plot(np.r_[pts[:, 0], pts[0, 0]], np.r_[pts[:, 1], pts[0, 1]], color=col, lw=1.2)
+        elif el.get("shape") == "line" and len(pts) >= 2:
+            ax.plot(pts[:, 0], pts[:, 1], color=col, lw=2.2)
+        else:
+            ax.plot(pts[:, 0], pts[:, 1], "o", color=col, ms=5)
+        c = pts.mean(axis=0)
+        ax.text(c[0], c[1], el.get("name") or el.get("cls", ""), fontsize=6.5, ha="center", va="center", color="#222",
+                bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85))
+    ax.set_xlim(x0, x0 + w); ax.set_ylim(y1 - h, y1); ax.set_aspect("equal"); ax.axis("off")
+    _save(fig, dst)
+    return True
+
+
+def preview_select(run: Run, dst: Path) -> bool:
+    return _thumb(run.dir / "edit" / "selection.png", dst)
+
+
+def preview_cut(run: Run, dst: Path) -> bool:
+    return _thumb(run.dir / "edit" / "cut.png", dst)
+
+
+def preview_complete(run: Run, dst: Path) -> bool:
+    return _thumb(run.dir / "edit" / "complete.png", dst)
+
+
 RENDERERS = {"sfm": preview_sfm, "register": preview_register, "dense": preview_dense, "landmarks": preview_landmarks,
-             "solve": preview_solve, "ortho": preview_ortho, "trace": preview_trace, "draw": preview_draw}
+             "solve": preview_solve, "ortho": preview_ortho, "trace": preview_trace, "annotate": preview_annotate, "draw": preview_draw,
+             "segment": preview_segment, "name": preview_name, "lift": preview_lift, "entities": preview_entities, "review": preview_review,
+             "select": preview_select, "cut": preview_cut, "complete": preview_complete}
 
 
 def render_stage(run: Run, stage: str) -> str | None:

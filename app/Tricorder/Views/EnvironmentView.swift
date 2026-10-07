@@ -231,8 +231,10 @@ struct RunsTable: View {
                 }
                 .width(min: 120, ideal: 150)
                 TableColumn("Output") { r in
-                    if let a = r.run.outputAsset {
+                    if let a = r.run.outputAsset, env.asset(a) != nil {
                         Button(env.asset(a)?.asset.name ?? a) { ws.open(.asset(env.id, a)) }.buttonStyle(.link)
+                    } else if let a = r.run.outputAsset, let rec = env.recording(a) {
+                        Button(rec.rec.name) { ws.open(.recording(env.id, a)) }.buttonStyle(.link)
                     } else {
                         Text("–").foregroundStyle(.secondary)
                     }
@@ -254,6 +256,7 @@ struct RecordingRows: View {
     @Environment(Workspace.self) private var ws
     let env: EnvironmentRecord
     let recordings: [RecordingRecord]
+    @State private var pendingDelete: RecordingRecord?
 
     var body: some View {
         if recordings.isEmpty {
@@ -263,10 +266,14 @@ struct RecordingRows: View {
                 Button { ws.open(.recording(env.id, r.rec.id)) } label: {
                     HStack(spacing: 14) {
                         Group {
-                            if r.isMeasurements, let first = r.rec.items.first {
+                            if r.isMeasurements, let first = r.rec.items.first(where: { !$0.isMesh }) {
                                 ItemPreview(item: first, dir: env.recording(first.recording)?.imagesDir, height: 64)
                             } else if r.isMeasurements {
                                 Rectangle().fill(.quaternary).overlay { Image(systemName: "ruler").foregroundStyle(.secondary) }
+                            } else if r.isMarks, let t = r.thumbnail {
+                                FileImage(url: t, maxPixel: 400).aspectRatio(contentMode: .fill)
+                            } else if r.isMarks {
+                                Rectangle().fill(Theme.accent.opacity(0.12)).overlay { Image(systemName: "pencil.and.outline").foregroundStyle(Theme.accent) }
                             } else if let t = r.thumbnail {
                                 FileImage(url: t, maxPixel: 400).aspectRatio(contentMode: .fill)
                             } else {
@@ -279,6 +286,15 @@ struct RecordingRows: View {
                             if r.isMeasurements {
                                 Text("\(r.rec.items.count) tape measurement\(r.rec.items.count == 1 ? "" : "s")" + (r.rec.north != nil ? " · north bearing" : "")
                                      + " · used by \(env.runsUsing(recording: r.rec.id).count) layout\(env.runsUsing(recording: r.rec.id).count == 1 ? "" : "s")")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            } else if r.isGenerated {
+                                Text("generated inventory · \(r.rec.marks.count) entities on \(env.asset(r.rec.markModel ?? "")?.asset.name ?? r.rec.markModel ?? "?")"
+                                     + " · used by \(env.runsUsing(recording: r.rec.id).count) run\(env.runsUsing(recording: r.rec.id).count == 1 ? "" : "s")")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            } else if r.isMarks {
+                                let edits = r.rec.marks.filter(\.isEdit).count
+                                Text("\(r.rec.marks.count) mark\(r.rec.marks.count == 1 ? "" : "s") on \(env.asset(r.rec.markModel ?? "")?.asset.name ?? r.rec.markModel ?? "?")"
+                                     + (edits > 0 ? " · \(edits) edit\(edits == 1 ? "" : "s")" : "") + " · used by \(env.runsUsing(recording: r.rec.id).count) run\(env.runsUsing(recording: r.rec.id).count == 1 ? "" : "s")")
                                     .font(.caption).foregroundStyle(.secondary)
                             } else {
                                 Text((r.rec.isPhotos ? "photos" : r.rec.source.fileName) + " · \(Format.videoLine(r.rec.source))").font(.caption).foregroundStyle(.secondary)
@@ -296,7 +312,20 @@ struct RecordingRows: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .contextMenu {
+                    Button("Open") { ws.open(.recording(env.id, r.rec.id)) }
+                    Button("Show in Finder") { ws.reveal(r.dir) }
+                    Divider()
+                    Button("Delete Recording…", role: .destructive) { pendingDelete = r }
+                }
                 if r.id != recordings.last?.id { Divider() }
+            }
+            .confirmationDialog("Delete “\(pendingDelete?.rec.name ?? "")”?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), presenting: pendingDelete) { r in
+                let deps = env.dependents(ofRecording: r.rec.id)
+                Button(deps.recordings.isEmpty ? "Move to Trash" : "Delete All", role: .destructive) { Task { await ws.deleteRecording(r) } }
+            } message: { r in
+                let deps = env.dependents(ofRecording: r.rec.id)
+                Text("The recording is moved to the Trash; runs that used it stay. " + Workspace.cascadeText(recordings: deps.recordings, assets: deps.assets))
             }
         }
     }

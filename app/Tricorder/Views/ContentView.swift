@@ -54,6 +54,8 @@ struct ContentView: View {
             if let env = ws.environment(e), let r = env.run(id) { RunView(env: env, record: r).id(r.id) } else { missing }
         case .asset(let e, let id):
             if let env = ws.environment(e), let a = env.asset(id) { AssetView(env: env, record: a).id(a.id) } else { missing }
+        case .editor(let e, let id, let rec):
+            if let env = ws.environment(e), let a = env.asset(id) { MeshEditorView(env: env, record: a, initialRecording: rec).id("editor-\(a.id)-\(rec ?? "")") } else { missing }
         }
     }
 

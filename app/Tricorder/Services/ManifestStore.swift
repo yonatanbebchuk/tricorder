@@ -5,7 +5,9 @@ import Foundation
 enum ManifestStore {
     static let stageLabels: [String: String] = [
         "frames": "Frames", "sfm": "COLMAP", "register": "Register", "dense": "OpenMVS", "landmarks": "Landmarks", "preview": "Preview",
-        "solve": "Scale & level", "ortho": "Orthomosaic", "trace": "Linework", "draw": "Drawing",
+        "solve": "Scale & level", "ortho": "Orthomosaic", "trace": "Linework", "annotate": "Elements", "draw": "Drawing",
+        "segment": "Segment", "name": "Name", "lift": "Lift", "entities": "Entities", "review": "Review",
+        "select": "Select", "cut": "Cut", "complete": "Complete",
     ]
     /// One line on what each stage does, for the pipeline view.
     static let stageBlurbs: [String: String] = [
@@ -18,7 +20,16 @@ enum ManifestStore {
         "solve": "measurements → scale, level, north; metric cloud",
         "ortho": "top-down render at true scale",
         "trace": "vertical surfaces → walls; dimensioned boundary",
-        "draw": "DEM, contours, DXF, PDF sheet",
+        "annotate": "generated inventory + your marks → named elements in plan metres",
+        "draw": "DEM, contours, DXF, PDF sheet, legend and quantities",
+        "segment": "every region of the frames as a mask (SAM, automatic)",
+        "name": "a vision-language model names each numbered region",
+        "lift": "mask pixels → rays → mesh faces; votes across frames",
+        "entities": "connected same-label faces → named entities with footprints",
+        "review": "each entity re-shown to the model: one thing? what is it?",
+        "select": "edit marks → faces and ground regions to cut or patch",
+        "cut": "selected faces out of the mesh, their points out of the cloud",
+        "complete": "holes filled on the fitted ground, textured from the surroundings",
     ]
     static let videoExtensions: Set<String> = ["mov", "mp4", "m4v", "mkv", "avi"]
     static let imageExtensions: Set<String> = ["jpg", "jpeg", "heic", "heif", "png", "dng", "tif", "tiff"]
@@ -63,7 +74,8 @@ enum ManifestStore {
                     prompts: try? decode(PromptSet.self, a.appending(path: "measure/prompts.json")),
                     constraints: loadConstraints(a),
                     transform: try? decode(Transform.self, a.appending(path: "transform.json")),
-                    overlay: try? decode(PlanOverlay.self, a.appending(path: "overlay.json"))))
+                    overlay: try? decode(PlanOverlay.self, a.appending(path: "overlay.json")),
+                    levelled: ((try? decode(LevelTransform.self, a.appending(path: asset.kind == .sitePlan ? "transform.json" : "transform_preview.json")))?.matrix)))
             }
             assets.sort { $0.asset.createdAt < $1.asset.createdAt }
 
@@ -164,6 +176,13 @@ enum ManifestStore {
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try enc.encode(c).write(to: file, options: .atomic)
+    }
+
+    /// Write a marks recording's items back into its manifest.
+    static func saveMarks(recordingDir: URL, items: [MarkItem]) throws {
+        let enc = JSONEncoder()
+        let itemsObj = try JSONSerialization.jsonObject(with: enc.encode(items))
+        try patchJSON(at: recordingDir.appending(path: "recording.json")) { obj in obj["items"] = itemsObj }
     }
 
     /// Write a measurement recording's items and north bearing back into its manifest.

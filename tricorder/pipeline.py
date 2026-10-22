@@ -38,7 +38,7 @@ from typing import Any
 
 from . import metrics, previews
 from .models import (ASSET_KINDS, DATA, ENVS, IMAGE_EXT, RECORDING_KINDS, ROOT, RUN_KINDS, RUN_OUTPUT_IS_RECORDING, VIDEO_EXT, Asset,
-                     Environment, FrameSettings, Recording, Run, RunSettings, Stage, next_id, now, slugify, unique_id, list_environments)
+                     Environment, FrameSettings, Recording, Run, RunSettings, Stage, next_id, now, slugify, unique_id, list_environments, _check_ids)
 
 PY = sys.executable
 SCRIPTS = ROOT / "scripts"

@@ -79,7 +79,7 @@ struct RunView: View {
             .navigationSubtitle(Format.settingsLine(run))
             .toolbar { toolbarItems }
             .confirmationDialog("Cancel this run?", isPresented: $confirmCancel) {
-                Button("Cancel Run", role: .destructive) { ws.cancelRun(record) }
+                Button("Cancel Run", role: .destructive) { Task { await ws.cancelRun(record) } }
             } message: {
                 Text("The stage in progress stops; finished stages are kept.")
             }

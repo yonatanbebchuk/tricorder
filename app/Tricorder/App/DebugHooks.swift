@@ -65,9 +65,9 @@ enum DebugHooks {
                 }
             }
         }
-        if env["TRICORDER_SMOKE"] != nil, let root = ws.root {
+        if env["TRICORDER_SMOKE"] != nil, let c = ws.compute {
             Task {
-                do { FileHandle.standardError.write(Data("smoke ok:\n\(try await Pipeline.run(root: root, ["list"]))".utf8)) }
+                do { FileHandle.standardError.write(Data("smoke ok:\n\(try await Pipeline.run(Pipeline.Target(c), ["list"]))".utf8)) }
                 catch { FileHandle.standardError.write(Data("smoke failed: \(error)\n".utf8)) }
             }
         }

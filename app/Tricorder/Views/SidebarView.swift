@@ -31,7 +31,7 @@ struct SidebarView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            HStack { HealthBar(health: ws.health); Spacer() }.padding(10)
+            HStack { HealthBar(health: ws.health, remote: ws.remote?.label); Spacer() }.padding(10)
         }
         .overlay {
             if ws.environments.isEmpty {

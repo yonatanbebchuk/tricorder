@@ -141,6 +141,17 @@ folder (it needs `tricorder/pipeline.py` and `.venv/bin/python`). Sources in `ap
 `app/Tricorder/App/DebugHooks.swift` documents the `TRICORDER_*` environment variables that size the window, select
 a page, render a screenshot or walk the demo tour; the screenshots above were made with them.
 
+## Running on another Mac
+
+The app can show and drive a pipeline that lives on another Mac on your Tailscale tailnet (a Mac mini that never
+sleeps, while you sit at a laptop). Settings ▸ Compute ▸ *Another Mac over SSH*: host, user, the checkout there,
+Test. From then on every command goes over SSH and runs there, runs are launched detached and keep going whatever the
+laptop does, and the app keeps a local mirror of that Mac's `work/environments` (manifests, logs, previews, site-plan
+files, frames; not the dense clouds, meshes, databases or videos) that it refreshes every few seconds. A new video is
+uploaded into that Mac's `data/` inbox first. The other Mac needs the current `tricorder/pipeline.py` (it answers
+`reconcile`, `cancel`, `health`, `inbox`, `trash`) and your SSH key in its `authorized_keys`. Design and what is
+left: [docs/REMOTE.md](docs/REMOTE.md).
+
 ## Command line
 
 ```bash

@@ -142,9 +142,19 @@ struct FileImage: View {
 
 struct HealthBar: View {
     let health: Health
+    var remote: String? = nil      // the compute Mac's name, when the pipeline runs there
 
     var body: some View {
         HStack(spacing: 12) {
+            if let remote {
+                HStack(spacing: 4) {
+                    Image(systemName: health.reachable ? "network" : "network.slash").foregroundStyle(health.reachable ? Theme.ok : Theme.bad)
+                    Text(remote).foregroundStyle(.secondary)
+                }
+                .help(!health.reachable ? "\(remote) is not reachable: is Tailscale on, on both ends?"
+                      : health.protocolVersion < Pipeline.protocolVersion ? "\(remote)'s checkout is older than this app expects: Settings ▸ Update from GitHub"
+                      : "runs on \(remote) over SSH, checkout at \(health.revision)")
+            }
             tool("colmap", health.colmap)
             tool("openmvs", health.openmvs)
             tool("blender", health.blender)

@@ -11,3 +11,4 @@ __pycache__/
 app/Tricorder.xcodeproj/
 app/build/
 xcuserdata/
+*.egg-info/

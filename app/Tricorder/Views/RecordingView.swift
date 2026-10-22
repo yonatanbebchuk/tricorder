@@ -268,6 +268,7 @@ struct VideoRecordingView: View {
                     Button("Show in Finder", systemImage: "folder") { ws.reveal(record.dir) }
                     Menu {
                         Button("Open Video") { ws.openFile(videoURL) }
+                            .disabled(!FileManager.default.fileExists(atPath: videoURL.path))   // not mirrored from a remote Mac
                         Divider()
                         Button("Delete Recording…", role: .destructive) { confirmDelete = true }
                             .disabled(record.isBusy)

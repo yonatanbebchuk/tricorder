@@ -68,7 +68,7 @@ struct NewEnvironmentSheet: View {
                 }
             }
         } footer: {
-            Text(message).font(.caption).foregroundStyle(.secondary)
+            Text(ws.transferStatus ?? message).font(.caption).foregroundStyle(.secondary)
             Spacer()
             Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
             Button(busy ? "Creating…" : "Create") { create() }
@@ -169,7 +169,7 @@ struct NewRecordingSheet: View {
                 TextField("Recording name", text: $name, prompt: Text("Close-ups of the shed"))
             }
         } footer: {
-            Text(message).font(.caption).foregroundStyle(.secondary)
+            Text(ws.transferStatus ?? message).font(.caption).foregroundStyle(.secondary)
             Spacer()
             Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
             Button(busy ? "Adding…" : "Add Photos") { createPhotos() }
@@ -231,7 +231,7 @@ struct NewRecordingSheet: View {
                 }
             }
             HStack {
-                Text(message).font(.caption).foregroundStyle(.secondary)
+                Text(ws.transferStatus ?? message).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(busy ? "Saving…" : "Save Recording") { createMeasurements() }
@@ -275,7 +275,7 @@ struct NewRecordingSheet: View {
                 }
             }
         } footer: {
-            Text(message).font(.caption).foregroundStyle(.secondary)
+            Text(ws.transferStatus ?? message).font(.caption).foregroundStyle(.secondary)
             Spacer()
             Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
             Button(busy ? "Adding…" : reconstruct ? "Add & Reconstruct" : "Add Recording") { create() }
@@ -286,7 +286,8 @@ struct NewRecordingSheet: View {
             if case .success(let u) = r { choose(u) }
         }
         .task {
-            inbox = ws.videosInInbox()
+            await ws.refreshInbox()
+            inbox = ws.inbox
             if let v = initialVideo { choose(v) }
         }
         .onChange(of: video) { _, new in if let new, name.isEmpty { name = suggestedName(new) } }

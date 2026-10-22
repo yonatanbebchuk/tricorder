@@ -38,7 +38,7 @@ from typing import Any
 
 from . import metrics, previews
 from .models import (ASSET_KINDS, DATA, ENVS, IMAGE_EXT, RECORDING_KINDS, ROOT, RUN_KINDS, RUN_OUTPUT_IS_RECORDING, VIDEO_EXT, Asset,
-                     Environment, FrameSettings, Recording, Run, RunSettings, Stage, next_id, now, slugify, unique_id)
+                     Environment, FrameSettings, Recording, Run, RunSettings, Stage, next_id, now, slugify, unique_id, list_environments)
 
 PY = sys.executable
 SCRIPTS = ROOT / "scripts"
@@ -959,6 +959,78 @@ def launch(args: list[str]) -> subprocess.Popen:
     return subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 
+# ---------------------------------------------------------------- remote control (the app on another Mac)
+
+def reconcile() -> list[str]:
+    """Runs marked running whose process is gone become interrupted, on the machine where the pid means something.
+    The app does this itself for a local checkout; a remote app asks for it before every mirror pull."""
+    fixed = []
+    for env in list_environments():
+        for rid in env.run_ids():
+            try:
+                run = Run.load(env.id, rid)
+            except Exception:
+                continue
+            if run.status != "running" or run.is_alive():
+                continue
+            run.status, run.pid, run.finished_at = "interrupted", None, now()
+            for st in run.stages.values():
+                if st.status == "running":
+                    st.status, st.finished_at, st.error = "interrupted", now(), "process died"
+            run.save()
+            fixed.append(f"{env.id}/{rid}")
+    return fixed
+
+
+def cancel(env_id: str, run_id: str) -> bool:
+    """SIGTERM a running run's process group; run_pipeline turns that into a clean 'cancelled'."""
+    run = Run.load(env_id, run_id)
+    if not run.is_alive():
+        return False
+    try:
+        os.killpg(os.getpgid(run.pid), signal.SIGTERM)
+    except ProcessLookupError:
+        os.kill(run.pid, signal.SIGTERM)
+    return True
+
+
+# What the app on another Mac expects of this checkout: bump when a command the app relies on is added or changed.
+PROTOCOL = 2
+
+
+def health() -> dict:
+    try:
+        rev = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception:
+        rev = ""
+    return {"protocol": PROTOCOL, "revision": rev,
+            "colmap": shutil.which("colmap") is not None,
+            "openmvs": os.access(ROOT / "tools" / "openmvs-install" / "bin" / "OpenMVS" / "DensifyPointCloud", os.X_OK)
+                       or shutil.which("docker") is not None,
+            "blender": os.access(BLENDER, os.X_OK), "python": True,
+            "host": os.uname().nodename, "root": str(ROOT)}
+
+
+def inbox() -> list[dict]:
+    """Videos waiting in data/ (paths relative to ROOT), newest first."""
+    DATA.mkdir(parents=True, exist_ok=True)
+    vids = [p for p in DATA.iterdir() if p.suffix.lower() in VIDEO_EXT and p.is_file()]
+    return [{"path": str(p.relative_to(ROOT)), "size": p.stat().st_size, "modified": p.stat().st_mtime}
+            for p in sorted(vids, key=lambda p: p.stat().st_mtime, reverse=True)]
+
+
+def trash(env_id: str, kind: str | None, item_id: str | None) -> Path:
+    """Move an environment, or one of its recordings / runs / assets, into work/trash/ (recoverable by hand)."""
+    _check_ids(env_id, *([item_id] if item_id else []))
+    src = ENVS / env_id if kind is None else ENVS / env_id / kind / item_id
+    if not src.exists():
+        raise KeyError(str(src))
+    dst = ROOT / "work" / "trash" / f"{now().replace(':', '-')}-{env_id}" / (f"{kind}-{item_id}" if kind else "environment")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+    return dst
+
+
 # ---------------------------------------------------------------- CLI
 
 def _settings_from(a) -> RunSettings:
@@ -1023,6 +1095,12 @@ def main(argv=None) -> int:
     p.add_argument("env_id"); p.add_argument("run_id")
     p.add_argument("--redo", action="append", default=[], metavar="STAGE", help="reset this stage first (repeatable), e.g. --redo preview")
     p = sub.add_parser("list")
+    p = sub.add_parser("reconcile", help="mark runs whose process died as interrupted (the app on another Mac asks before each mirror pull)")
+    p = sub.add_parser("cancel", help="SIGTERM a running run"); p.add_argument("env_id"); p.add_argument("run_id")
+    p = sub.add_parser("health", help="which tools this checkout has, as JSON")
+    p = sub.add_parser("inbox", help="videos waiting in data/, as JSON")
+    p = sub.add_parser("trash", help="move an environment, or one of its recordings / runs / assets, into work/trash/")
+    p.add_argument("env_id"); p.add_argument("kind", nargs="?", choices=["recordings", "runs", "assets"]); p.add_argument("item_id", nargs="?")
     p = sub.add_parser("migrate-inventories", help="turn inventory assets from before 2026-10-03 into generated marks recordings")
     p.add_argument("env_id")
     p = sub.add_parser("launch", help="start a pipeline command detached (own session, under caffeinate) and return at once")
@@ -1115,8 +1193,25 @@ def main(argv=None) -> int:
                 json.dump(d, open(p, "w"), indent=1)
                 print(f"run {rid}: inventory {inv} -> {key} {mapping.get(inv, inv)}")
         return 0
+    if a.cmd == "reconcile":
+        for f in reconcile():
+            print(f"interrupted {f}")
+        return 0
+    if a.cmd == "cancel":
+        print("signalled" if cancel(a.env_id, a.run_id) else "not running")
+        return 0
+    if a.cmd == "health":
+        print(json.dumps(health()))
+        return 0
+    if a.cmd == "inbox":
+        print(json.dumps(inbox()))
+        return 0
+    if a.cmd == "trash":
+        if bool(a.kind) != bool(a.item_id):
+            ap.error("trash takes an environment, or an environment plus kind and id")
+        print(f"trashed -> {trash(a.env_id, a.kind, a.item_id)}")
+        return 0
     if a.cmd == "list":
-        from .models import list_environments
         for e in list_environments():
             print(f"{e.id:24s} {e.name}")
             for r in e.recording_ids():

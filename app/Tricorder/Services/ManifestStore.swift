@@ -39,7 +39,9 @@ enum ManifestStore {
 
     // MARK: reading
 
-    static func loadAll(root: URL) -> [EnvironmentRecord] {
+    /// `reconcile`: mark a running run whose process is gone as interrupted (only where its pid means something:
+    /// a local checkout; a remote host reconciles itself before each mirror pull).
+    static func loadAll(root: URL, reconcile doReconcile: Bool = true) -> [EnvironmentRecord] {
         let fm = FileManager.default
         let dir = environmentsDir(root)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -59,7 +61,7 @@ enum ManifestStore {
             var runs: [RunRecord] = []
             for r in children(of: edir.appending(path: "runs")) {
                 guard var run = try? decode(Run.self, r.appending(path: "run.json")) else { continue }
-                let alive = reconcile(&run, dir: r)
+                let alive = doReconcile ? reconcile(&run, dir: r) : run.status == .running
                 runs.append(RunRecord(run: run, dir: r, alive: alive))
             }
             runs.sort { number($0.run.id) < number($1.run.id) }

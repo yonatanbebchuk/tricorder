@@ -186,6 +186,7 @@ struct VideoFile: Identifiable, Hashable, Sendable {
     let url: URL
     let size: Int
     let modified: Date
+    var remote = false          // already in the compute Mac's data/ inbox (url is a path there)
     var id: String { url.path }
 }
 
@@ -194,6 +195,9 @@ struct Health: Hashable, Sendable {
     var openmvs = false
     var blender = false
     var python = false
+    var reachable = true        // false: the remote host did not answer
+    var revision = ""           // the checkout's git revision
+    var protocolVersion = 0     // the pipeline's PROTOCOL; the app needs Pipeline.protocolVersion
 }
 
 /// Sidebar selection: an environment, or one of its three collections.
